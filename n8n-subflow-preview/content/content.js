@@ -107,6 +107,10 @@
   };
 
   function init() {
+    if (!looksLikeN8nPage()) {
+      return;
+    }
+
     currentWorkflowId = getWorkflowIdFromUrl();
     if (!currentWorkflowId) return;
 
@@ -144,6 +148,24 @@
     return match ? match[1] : null;
   }
 
+  function looksLikeN8nPage() {
+    const pathLooksRight = window.location.pathname.includes('/workflow/');
+    if (!pathLooksRight) return false;
+
+    const appEl = document.getElementById('app');
+    const hasVueApp = Boolean(appEl && appEl.__vue_app__);
+    const hasCanvasNode = Boolean(document.querySelector('[data-test-id="canvas-node"]'));
+    const titleHasN8n = (document.title || '').toLowerCase().includes('n8n');
+    const sidebarEl = document.querySelector('#sidebar');
+    const sidebarText = (sidebarEl && sidebarEl.textContent ? sidebarEl.textContent : '').toLowerCase();
+    const hasN8nSidebar = Boolean(
+      sidebarEl
+      && (sidebarText.includes('n8n') || sidebarText.includes('workflow') || sidebarText.includes('executions'))
+    );
+
+    return hasVueApp || hasCanvasNode || titleHasN8n || hasN8nSidebar;
+  }
+
   function watchUrlChanges() {
     let lastUrl = location.href;
     const observer = new MutationObserver(() => {
@@ -171,6 +193,7 @@
   function listenForProbeResults() {
     window.addEventListener('message', (event) => {
       if (event.source !== window || !event.data) return;
+      if (event.origin !== window.location.origin) return;
 
       if (event.data.type === 'n8n-subflow-probe-result') {
         if (event.data.payload) {
@@ -533,10 +556,19 @@
     const nameHtml = safeName
       ? ` <span class="n8n-sf-overlay-wf-name">${safeName}</span>`
       : '';
-    const expandBtn = options.showExpand
-      ? `<span class="n8n-sf-overlay-header-spacer"></span><button type="button" class="n8n-sf-overlay-expand" title="Expand side panel" aria-label="Expand side panel">⤢</button>`
+    const openUrl = options.subWorkflowId
+      ? `${window.location.origin}/workflow/${encodeURIComponent(options.subWorkflowId)}`
       : '';
-    return `<div class="n8n-sf-overlay-header">Sub-workflow preview${nameHtml}${expandBtn}</div>`;
+    const openBtn = options.showOpen && openUrl
+      ? `<a class="n8n-sf-overlay-open" href="${openUrl}" target="_blank" rel="noopener noreferrer" title="Open sub-workflow in new tab" aria-label="Open sub-workflow in new tab">↗ <span>Open Subflow</span></a>`
+      : '';
+    const expandBtn = options.showExpand
+      ? `<button type="button" class="n8n-sf-overlay-expand" title="Expand side panel" aria-label="Expand side panel">⤢</button>`
+      : '';
+    const actionsHtml = (openBtn || expandBtn)
+      ? `<div class="n8n-sf-overlay-actions">${openBtn}${expandBtn}</div>`
+      : '';
+    return `<div class="n8n-sf-overlay-header">Sub-workflow preview${nameHtml}${actionsHtml ? '<span class="n8n-sf-overlay-header-spacer"></span>' : ''}${actionsHtml}</div>`;
   }
 
   function showInlineLoading(anchorEl) {
@@ -594,11 +626,21 @@
 
     hoverState.cachedWorkflowData = workflowData;
     inlineOverlayEl.innerHTML = `
-      ${buildOverlayHeader(workflowData.name, { showExpand: true })}
+      ${buildOverlayHeader(workflowData.name, {
+        showOpen: true,
+        showExpand: true,
+        subWorkflowId
+      })}
       <div class="n8n-sf-inline-map"></div>
     `;
 
     const mapContainer = inlineOverlayEl.querySelector('.n8n-sf-inline-map');
+    const openBtn = inlineOverlayEl.querySelector('.n8n-sf-overlay-open');
+    if (openBtn) {
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
     const expandBtn = inlineOverlayEl.querySelector('.n8n-sf-overlay-expand');
     if (expandBtn) {
       expandBtn.addEventListener('click', (e) => {

@@ -7,63 +7,117 @@
   var probeTimer = null;
   var isProbing = false;
   var didSucceed = false;
-
-  // Only run on pages that look like n8n workflow editor
-  if (!window.location.pathname.match(/\/workflow\//)) return;
-
-  // ---- Intercept fetch to capture auth headers n8n uses for /rest/ calls ----
-  var capturedAuthHeaders = null;
   var _originalFetch = window.fetch;
+  var isActiveN8nPage = false;
+  var networkHooksInstalled = false;
 
-  window.fetch = function (input, init) {
-    try {
-      var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-      if (url.indexOf('/rest/') !== -1 && init && init.headers) {
-        var h = {};
-        if (typeof Headers !== 'undefined' && init.headers instanceof Headers) {
-          init.headers.forEach(function (val, key) { h[key.toLowerCase()] = val; });
-        } else if (typeof init.headers === 'object' && !Array.isArray(init.headers)) {
-          var keys = Object.keys(init.headers);
-          for (var i = 0; i < keys.length; i++) { h[keys[i].toLowerCase()] = init.headers[keys[i]]; }
-        }
-        if (Object.keys(h).length > 0) {
-          capturedAuthHeaders = h;
-        }
+  // Keep captured headers private inside a closure.
+  var authCapture = (function () {
+    var capturedAuthHeaders = null;
+    var capturedXhrHeaders = null;
+
+    function cloneHeaders(input) {
+      if (!input || typeof input !== 'object') return null;
+      var out = {};
+      var keys = Object.keys(input);
+      for (var i = 0; i < keys.length; i++) out[keys[i]] = input[keys[i]];
+      return out;
+    }
+
+    return {
+      setFetchHeaders: function (headers) {
+        capturedAuthHeaders = cloneHeaders(headers);
+      },
+      setXhrHeaders: function (headers) {
+        capturedXhrHeaders = cloneHeaders(headers);
+      },
+      getFetchHeaders: function () {
+        return cloneHeaders(capturedAuthHeaders);
+      },
+      getXhrHeaders: function () {
+        return cloneHeaders(capturedXhrHeaders);
+      },
+      clearCapturedHeaders: function () {
+        capturedAuthHeaders = null;
+        capturedXhrHeaders = null;
       }
-    } catch (_e) { /* never break n8n's own fetch */ }
-    return _originalFetch.apply(this, arguments);
-  };
+    };
+  })();
 
-  // ---- Intercept XMLHttpRequest to capture auth headers from Axios/XHR calls ----
-  // n8n uses Axios which goes through XHR, not fetch — this is where the real auth lives
-  var capturedXhrHeaders = null;
-  var _xhrOpen = XMLHttpRequest.prototype.open;
-  var _xhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+  function isSameOriginPageMessage(event) {
+    return Boolean(
+      event
+      && event.source === window
+      && event.origin === window.location.origin
+    );
+  }
 
-  XMLHttpRequest.prototype.open = function (method, url) {
-    // Tag this XHR instance so setRequestHeader knows to capture headers
-    this._n8nSubflowUrl = (typeof url === 'string') ? url : '';
-    this._n8nSubflowHeaders = {};
-    return _xhrOpen.apply(this, arguments);
-  };
+  function looksLikeN8nWorkflowPage() {
+    if (window.location.pathname.indexOf('/workflow/') === -1) return false;
 
-  XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    try {
-      if (this._n8nSubflowUrl && this._n8nSubflowUrl.indexOf('/rest/') !== -1) {
-        this._n8nSubflowHeaders[name.toLowerCase()] = value;
-        // Persist the most recent complete set of auth headers from /rest/ calls
-        if (Object.keys(this._n8nSubflowHeaders).length > 0) {
-          capturedXhrHeaders = {};
-          for (var k in this._n8nSubflowHeaders) {
-            capturedXhrHeaders[k] = this._n8nSubflowHeaders[k];
+    var appEl = document.getElementById('app');
+    var hasVueApp = !!(appEl && appEl.__vue_app__);
+    var hasCanvasNode = !!document.querySelector('[data-test-id="canvas-node"]');
+    var titleHasN8n = (document.title || '').toLowerCase().indexOf('n8n') !== -1;
+    var sidebar = document.querySelector('#sidebar');
+    var sidebarText = (sidebar && sidebar.textContent ? sidebar.textContent : '').toLowerCase();
+    var hasN8nSidebar = !!(
+      sidebar
+      && (sidebarText.indexOf('n8n') !== -1 || sidebarText.indexOf('workflow') !== -1 || sidebarText.indexOf('executions') !== -1)
+    );
+
+    return hasVueApp || hasCanvasNode || titleHasN8n || hasN8nSidebar;
+  }
+
+  function installNetworkHooks() {
+    if (networkHooksInstalled) return;
+    networkHooksInstalled = true;
+
+    // ---- Intercept fetch to capture auth headers n8n uses for /rest/ calls ----
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+        if (url.indexOf('/rest/') !== -1 && init && init.headers) {
+          var h = {};
+          if (typeof Headers !== 'undefined' && init.headers instanceof Headers) {
+            init.headers.forEach(function (val, key) { h[key.toLowerCase()] = val; });
+          } else if (typeof init.headers === 'object' && !Array.isArray(init.headers)) {
+            var keys = Object.keys(init.headers);
+            for (var i = 0; i < keys.length; i++) { h[keys[i].toLowerCase()] = init.headers[keys[i]]; }
+          }
+          if (Object.keys(h).length > 0) {
+            authCapture.setFetchHeaders(h);
           }
         }
-      }
-    } catch (_e) { /* never break n8n's XHR */ }
-    return _xhrSetRequestHeader.apply(this, arguments);
-  };
+      } catch (_e) { /* never break n8n's own fetch */ }
+      return _originalFetch.apply(this, arguments);
+    };
 
-  console.log(LOG, 'Starting — looking for workflow data in n8n stores...');
+    // ---- Intercept XMLHttpRequest to capture auth headers from Axios/XHR calls ----
+    // n8n uses Axios which goes through XHR, not fetch — this is where the real auth lives
+    var _xhrOpen = XMLHttpRequest.prototype.open;
+    var _xhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+    XMLHttpRequest.prototype.open = function (method, url) {
+      // Tag this XHR instance so setRequestHeader knows to capture headers
+      this._n8nSubflowUrl = (typeof url === 'string') ? url : '';
+      this._n8nSubflowHeaders = {};
+      return _xhrOpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+      try {
+        if (this._n8nSubflowUrl && this._n8nSubflowUrl.indexOf('/rest/') !== -1) {
+          this._n8nSubflowHeaders[name.toLowerCase()] = value;
+          // Persist the most recent complete set of auth headers from /rest/ calls
+          if (Object.keys(this._n8nSubflowHeaders).length > 0) {
+            authCapture.setXhrHeaders(this._n8nSubflowHeaders);
+          }
+        }
+      } catch (_e) { /* never break n8n's XHR */ }
+      return _xhrSetRequestHeader.apply(this, arguments);
+    };
+  }
 
   function getWorkflowsStore() {
     // Get the Pinia "workflows" store (the one with the current workflow data)
@@ -229,14 +283,14 @@
 
   // Listen for re-probe requests from the content script (e.g. on URL change)
   window.addEventListener('message', function (event) {
-    if (event.data && event.data.type === 'n8n-subflow-probe-request') {
-      console.log(LOG, 'Re-probe requested by content script');
-      if (probeTimer) clearTimeout(probeTimer);
-      attempts = 0;
-      didSucceed = false;
-      isProbing = false;
-      probe();
-    }
+    if (!isActiveN8nPage || !isSameOriginPageMessage(event) || !event.data) return;
+    if (event.data.type !== 'n8n-subflow-probe-request') return;
+    console.log(LOG, 'Re-probe requested by content script');
+    if (probeTimer) clearTimeout(probeTimer);
+    attempts = 0;
+    didSucceed = false;
+    isProbing = false;
+    probe();
   });
 
   // ---- Listen for sub-workflow fetch requests ----
@@ -761,7 +815,8 @@
   }
 
   window.addEventListener('message', function (event) {
-    if (!event.data || event.data.type !== 'n8n-subflow-fetch-request') return;
+    if (!isActiveN8nPage || !isSameOriginPageMessage(event) || !event.data) return;
+    if (event.data.type !== 'n8n-subflow-fetch-request') return;
     (async function () {
       var reqId = event.data.reqId;
       var workflowId = event.data.workflowId;
@@ -789,19 +844,21 @@
       var headerSources = [];
 
       // Prefer headers captured from XHR (Axios) — this is where n8n's real auth lives
+      var capturedXhrHeaders = authCapture.getXhrHeaders();
       if (capturedXhrHeaders && Object.keys(capturedXhrHeaders).length > 0) {
         var xhrH = {};
         for (var xk in capturedXhrHeaders) { xhrH[xk] = capturedXhrHeaders[xk]; }
         xhrH['accept'] = 'application/json';
-        headerSources.push({ label: 'captured-xhr', headers: xhrH });
+        headerSources.push({ label: 'captured-xhr', headers: xhrH, usesCapturedHeaders: true });
       }
 
       // Also try headers from fetch interception (Sentry/telemetry might not help, but worth a shot)
+      var capturedAuthHeaders = authCapture.getFetchHeaders();
       if (capturedAuthHeaders && Object.keys(capturedAuthHeaders).length > 0) {
         var captured = {};
         for (var ck in capturedAuthHeaders) { captured[ck] = capturedAuthHeaders[ck]; }
         captured['accept'] = 'application/json';
-        headerSources.push({ label: 'captured-fetch', headers: captured });
+        headerSources.push({ label: 'captured-fetch', headers: captured, usesCapturedHeaders: true });
       }
 
       // Fallback: headers discovered from Pinia/storage
@@ -824,6 +881,9 @@
           var json = await res.json();
           var data = json.data || json;
           if (data && Array.isArray(data.nodes)) await enrichNodesWithIcons(data.nodes, true);
+          if (src.usesCapturedHeaders) {
+            authCapture.clearCapturedHeaders();
+          }
           diagnostics.status = 200;
           window.postMessage({
             type: 'n8n-subflow-fetch-result',
@@ -856,6 +916,20 @@
     })();
   });
 
-  // Start after a short delay to give n8n time to initialize
-  probeTimer = setTimeout(probe, 2000);
+  function startIfN8nPage() {
+    if (!looksLikeN8nWorkflowPage()) {
+      return;
+    }
+    isActiveN8nPage = true;
+    installNetworkHooks();
+    console.log(LOG, 'Starting — looking for workflow data in n8n stores...');
+    // Start after a short delay to give n8n time to initialize
+    probeTimer = setTimeout(probe, 2000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startIfN8nPage, { once: true });
+  } else {
+    startIfN8nPage();
+  }
 })();

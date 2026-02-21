@@ -179,15 +179,16 @@ const PreviewRenderer = (() => {
 
       // Centered icon inside the card — use real n8n icon if available, else emoji glyph
       const icon = document.createElement('div');
-      const hasImageIcon = Boolean(node._iconUrl);
+      const safeIconUrl = sanitizeIconUrl(node._iconUrl);
+      const hasImageIcon = Boolean(safeIconUrl);
       const isFaIcon = Boolean(node._iconFa);
       // Native n8n SVG icons keep their own colors, so use a neutral icon background.
       const iconClass = hasImageIcon && !isFaIcon ? 'kind-native' : colorClass;
       icon.className = `n8n-sf-html-icon ${iconClass}`;
 
-      if (node._iconUrl) {
+      if (safeIconUrl) {
         const img = document.createElement('img');
-        img.src = node._iconUrl;
+        img.src = safeIconUrl;
         img.className = 'n8n-sf-html-icon-img';
         img.alt = '';
         img.onerror = function () {
@@ -198,6 +199,9 @@ const PreviewRenderer = (() => {
         };
         icon.appendChild(img);
       } else {
+        if (node._iconUrl) {
+          console.warn('[n8n SubFlow Preview] blocked unsafe icon URL, using glyph fallback:', node._iconUrl);
+        }
         icon.textContent = glyph;
       }
       card.appendChild(icon);
@@ -223,6 +227,22 @@ const PreviewRenderer = (() => {
     if (t.includes('google') || t.includes('sheet') || t.includes('database') || t.includes('postgres') || t.includes('mysql') || t.includes('mongo')) return 'kind-data';
     if (t.includes('http') || t.includes('request')) return 'kind-http';
     return 'kind-action';
+  }
+
+  function sanitizeIconUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const lower = raw.toLowerCase();
+    if (lower.includes('javascript:') || lower.includes('vbscript:') || lower.includes('data:text/')) {
+      return null;
+    }
+
+    if (lower.startsWith('https://')) return raw;
+    if (lower.startsWith('http://localhost')) return raw;
+    if (lower.startsWith('data:image/svg')) return raw;
+    if (lower.startsWith('data:image/png')) return raw;
+    return null;
   }
 
   function getGlyph(type) {

@@ -1,8 +1,16 @@
 // Chunk 3 side panel (right drawer) for expanded sub-workflow view.
 
 const SidePanel = (() => {
+  const WIDTH_STORAGE_KEY = 'n8n_subflow_side_panel_width';
+  const DEFAULT_PANEL_WIDTH = 800;
+  const MIN_PANEL_WIDTH = 320;
+  const MAX_PANEL_WIDTH_RATIO = 0.8;
+
   let panelEl = null;
   let escHandlerBound = false;
+  let viewportResizeBound = false;
+  let panelWidth = DEFAULT_PANEL_WIDTH;
+  let panelWidthLoaded = false;
 
   function ensurePanel() {
     if (panelEl) return;
@@ -10,15 +18,28 @@ const SidePanel = (() => {
     panelEl = document.createElement('aside');
     panelEl.className = 'n8n-sf-side-panel';
     panelEl.innerHTML = `
+      <div class="n8n-sf-sp-resize-handle" aria-hidden="true"><span>◂▸</span></div>
       <div class="n8n-sf-sp-header">
         <h2 class="n8n-sf-sp-title">Sub-workflow</h2>
-        <button class="n8n-sf-sp-close" aria-label="Close">×</button>
+        <div class="n8n-sf-sp-header-actions">
+          <span class="n8n-sf-sp-esc-hint">Press Esc to close</span>
+          <button class="n8n-sf-sp-close" aria-label="Close">×</button>
+        </div>
       </div>
       <div class="n8n-sf-sp-body"></div>
     `;
     document.body.appendChild(panelEl);
 
     panelEl.querySelector('.n8n-sf-sp-close').addEventListener('click', close);
+    bindResizeHandle();
+    restoreSavedWidth();
+    if (!viewportResizeBound) {
+      viewportResizeBound = true;
+      window.addEventListener('resize', () => {
+        if (!panelEl) return;
+        applyPanelWidth(panelWidth, false);
+      });
+    }
   }
 
   function open(workflowData, workflowId, theme) {
@@ -26,6 +47,7 @@ const SidePanel = (() => {
     const resolvedTheme = theme || ThemeDetector.detect() || 'dark';
     panelEl.classList.remove('theme-light', 'theme-dark');
     panelEl.classList.add('theme-' + resolvedTheme);
+    applyPanelWidth(panelWidth, false);
 
     const body = panelEl.querySelector('.n8n-sf-sp-body');
     const name = workflowData?.name || 'Sub-workflow';
@@ -92,6 +114,78 @@ const SidePanel = (() => {
     });
     container.addEventListener('mouseleave', () => {
       if (container.classList.contains('n8n-sf-sp-map-grabbing')) onUp();
+    });
+  }
+
+  function clampPanelWidth(value) {
+    const maxWidth = Math.max(MIN_PANEL_WIDTH, Math.floor(window.innerWidth * MAX_PANEL_WIDTH_RATIO));
+    return Math.min(maxWidth, Math.max(MIN_PANEL_WIDTH, Math.round(value || DEFAULT_PANEL_WIDTH)));
+  }
+
+  function applyPanelWidth(width, persist) {
+    if (!panelEl) return;
+    panelWidth = clampPanelWidth(width);
+    panelEl.style.width = panelWidth + 'px';
+    if (persist) {
+      try {
+        chrome.storage.local.set({ [WIDTH_STORAGE_KEY]: panelWidth });
+      } catch (_err) {
+        // Ignore storage edge cases.
+      }
+    }
+  }
+
+  function restoreSavedWidth() {
+    if (panelWidthLoaded) return;
+    panelWidthLoaded = true;
+    try {
+      chrome.storage.local.get([WIDTH_STORAGE_KEY], (data) => {
+        const saved = Number(data && data[WIDTH_STORAGE_KEY]);
+        if (Number.isFinite(saved) && saved > 0) {
+          panelWidth = saved;
+        }
+        applyPanelWidth(panelWidth, false);
+      });
+    } catch (_err) {
+      applyPanelWidth(panelWidth, false);
+    }
+  }
+
+  function bindResizeHandle() {
+    if (!panelEl) return;
+    const handle = panelEl.querySelector('.n8n-sf-sp-resize-handle');
+    if (!handle) return;
+
+    let startX = 0;
+    let startWidth = 0;
+    let dragging = false;
+
+    const onMove = (event) => {
+      if (!dragging) return;
+      const delta = startX - event.clientX;
+      applyPanelWidth(startWidth + delta, false);
+    };
+
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      panelEl.classList.remove('is-resizing');
+      document.body.classList.remove('n8n-sf-panel-resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      applyPanelWidth(panelWidth, true);
+    };
+
+    handle.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      startX = event.clientX;
+      startWidth = panelEl.getBoundingClientRect().width || panelWidth;
+      panelEl.classList.add('is-resizing');
+      document.body.classList.add('n8n-sf-panel-resizing');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      event.preventDefault();
     });
   }
 
