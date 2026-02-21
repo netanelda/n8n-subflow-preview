@@ -2,7 +2,7 @@
 
 const SidePanel = (() => {
   const WIDTH_STORAGE_KEY = 'n8n_subflow_side_panel_width';
-  const DEFAULT_PANEL_WIDTH = 800;
+  const DEFAULT_PANEL_WIDTH = 700;
   const MIN_PANEL_WIDTH = 320;
   const MAX_PANEL_WIDTH_RATIO = 0.8;
 
@@ -77,7 +77,7 @@ const SidePanel = (() => {
     panelEl.querySelector('.n8n-sf-sp-title').textContent = name;
     const mapContainer = body.querySelector('.n8n-sf-sp-map');
     PreviewRenderer.render(workflowData, mapContainer, { theme: resolvedTheme, size: 'large' });
-    setupMapScrollAndPan(mapContainer);
+    setupMapPan(mapContainer);
 
     panelEl.classList.add('visible');
     bindEscHandler();
@@ -88,32 +88,40 @@ const SidePanel = (() => {
     panelEl.classList.remove('visible');
   }
 
-  // Horizontal scroll + drag-to-pan for the flow diagram in the side panel
-  function setupMapScrollAndPan(container) {
+  // Drag-to-pan for the flow diagram in the side panel (X + Y)
+  function setupMapPan(container) {
     if (!container) return;
+    container.classList.add('n8n-sf-pannable-map');
     let startX = 0;
+    let startY = 0;
     let startScrollLeft = 0;
+    let startScrollTop = 0;
+    let dragging = false;
 
     const onMove = (e) => {
+      if (!dragging) return;
       container.scrollLeft = startScrollLeft + startX - e.clientX;
+      container.scrollTop = startScrollTop + startY - e.clientY;
     };
     const onUp = () => {
-      container.classList.remove('n8n-sf-sp-map-grabbing');
+      if (!dragging) return;
+      dragging = false;
+      container.classList.remove('n8n-sf-map-grabbing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     };
 
     container.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      dragging = true;
       startX = e.clientX;
+      startY = e.clientY;
       startScrollLeft = container.scrollLeft;
-      container.classList.add('n8n-sf-sp-map-grabbing');
+      startScrollTop = container.scrollTop;
+      container.classList.add('n8n-sf-map-grabbing');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       e.preventDefault();
-    });
-    container.addEventListener('mouseleave', () => {
-      if (container.classList.contains('n8n-sf-sp-map-grabbing')) onUp();
     });
   }
 

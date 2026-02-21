@@ -554,7 +554,11 @@
   function buildOverlayHeader(workflowName, options = {}) {
     const safeName = workflowName ? escapeHtml(workflowName) : '';
     const nameHtml = safeName
-      ? ` <span class="n8n-sf-overlay-wf-name">${safeName}</span>`
+      ? ` <span class="n8n-sf-overlay-wf-name" title="${safeName}">${safeName}</span>`
+      : '';
+    const nodeCount = Number(options.nodeCount);
+    const nodeCountBadge = Number.isFinite(nodeCount) && nodeCount >= 0
+      ? ` <span class="n8n-sf-overlay-node-count">${nodeCount} ${nodeCount === 1 ? 'node' : 'nodes'}</span>`
       : '';
     const openUrl = options.subWorkflowId
       ? `${window.location.origin}/workflow/${encodeURIComponent(options.subWorkflowId)}`
@@ -568,14 +572,14 @@
     const actionsHtml = (openBtn || expandBtn)
       ? `<div class="n8n-sf-overlay-actions">${openBtn}${expandBtn}</div>`
       : '';
-    return `<div class="n8n-sf-overlay-header">Sub-workflow preview${nameHtml}${actionsHtml ? '<span class="n8n-sf-overlay-header-spacer"></span>' : ''}${actionsHtml}</div>`;
+    return `<div class="n8n-sf-overlay-header"><div class="n8n-sf-overlay-title"><span class="n8n-sf-overlay-label">Sub-workflow preview</span>${nameHtml}${nodeCountBadge}</div>${actionsHtml}</div>`;
   }
 
   function showInlineLoading(anchorEl) {
     ensureInlineOverlay();
     applyInlineTheme();
     inlineOverlayEl.classList.remove('fading');
-    inlineOverlayEl.style.width = '556px';
+    inlineOverlayEl.style.width = Math.min(556, getOverlayMaxWidth()) + 'px';
     inlineOverlayEl.style.height = '';
     inlineOverlayEl.innerHTML = `
       ${buildOverlayHeader()}
@@ -594,7 +598,7 @@
     ensureInlineOverlay();
     applyInlineTheme();
     inlineOverlayEl.classList.remove('fading');
-    inlineOverlayEl.style.width = '556px';
+    inlineOverlayEl.style.width = Math.min(556, getOverlayMaxWidth()) + 'px';
     inlineOverlayEl.style.height = '';
     const openUrl = subWorkflowId
       ? `${window.location.origin}/workflow/${encodeURIComponent(subWorkflowId)}`
@@ -629,7 +633,8 @@
       ${buildOverlayHeader(workflowData.name, {
         showOpen: true,
         showExpand: true,
-        subWorkflowId
+        subWorkflowId,
+        nodeCount: Array.isArray(workflowData.nodes) ? workflowData.nodes.length : 0
       })}
       <div class="n8n-sf-inline-map"></div>
     `;
@@ -662,16 +667,19 @@
       totalNodeHeight: 82,
       pad: 24
     });
+    setupMapPan(mapContainer);
 
     // Size overlay to fit map (no scrolling); cap at viewport
     const wrapper = mapContainer.firstElementChild;
     if (wrapper) {
       const mapW = wrapper.offsetWidth;
       const mapH = wrapper.offsetHeight;
-      const maxW = Math.min(920, Math.floor(window.innerWidth * 0.92));
+      const maxW = getOverlayMaxWidth();
       const maxH = Math.min(420, Math.floor(window.innerHeight * 0.8));
       const headerH = 36;
-      const overlayW = Math.min(Math.max(mapW, 556), maxW);
+      const headerEl = inlineOverlayEl.querySelector('.n8n-sf-overlay-header');
+      const headerW = headerEl ? Math.ceil(headerEl.scrollWidth + 12) : 0;
+      const overlayW = Math.min(Math.max(mapW, headerW, 556), maxW);
       const overlayH = Math.min(headerH + mapH, maxH);
       inlineOverlayEl.style.width = overlayW + 'px';
       inlineOverlayEl.style.height = overlayH + 'px';
@@ -694,12 +702,75 @@
     if (!inlineOverlayEl) return;
     // Bottom-center dock: always sits at the bottom of the viewport, out of the way
     const overlayWidth = inlineOverlayEl.offsetWidth || 580;
-    const left = Math.max(12, (window.innerWidth - overlayWidth) / 2);
+    let left = Math.max(12, (window.innerWidth - overlayWidth) / 2);
+    const sidePanelWidth = getVisibleSidePanelWidth();
+    if (sidePanelWidth > 0) {
+      const maxRight = window.innerWidth - sidePanelWidth - 20;
+      const availableWidth = Math.max(320, maxRight - 12);
+      if (overlayWidth > availableWidth) {
+        inlineOverlayEl.style.width = availableWidth + 'px';
+      }
+      const adjustedWidth = inlineOverlayEl.offsetWidth || overlayWidth;
+      const maxLeft = maxRight - adjustedWidth;
+      left = Math.max(12, Math.min(left, maxLeft));
+    }
     const bottom = 16;
 
     inlineOverlayEl.style.left = `${left}px`;
     inlineOverlayEl.style.top = '';
     inlineOverlayEl.style.bottom = `${bottom}px`;
+  }
+
+  function getVisibleSidePanelWidth() {
+    const sidePanel = document.querySelector('.n8n-sf-side-panel.visible');
+    if (!sidePanel) return 0;
+    const rect = sidePanel.getBoundingClientRect();
+    return rect.width || 0;
+  }
+
+  function getOverlayMaxWidth() {
+    const baseMax = Math.min(750, Math.floor(window.innerWidth * 0.92));
+    const sidePanelWidth = getVisibleSidePanelWidth();
+    if (!sidePanelWidth) return Math.max(320, baseMax);
+    const noOverlapMax = Math.floor(window.innerWidth - sidePanelWidth - 32);
+    return Math.max(320, Math.min(baseMax, noOverlapMax));
+  }
+
+  // Drag-to-pan for overflowed mini-maps (X + Y) without scrollbars.
+  function setupMapPan(container) {
+    if (!container) return;
+    container.classList.add('n8n-sf-pannable-map');
+    let startX = 0;
+    let startY = 0;
+    let startScrollLeft = 0;
+    let startScrollTop = 0;
+    let dragging = false;
+
+    const onMove = (event) => {
+      if (!dragging) return;
+      container.scrollLeft = startScrollLeft + startX - event.clientX;
+      container.scrollTop = startScrollTop + startY - event.clientY;
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      container.classList.remove('n8n-sf-map-grabbing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    container.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      startScrollLeft = container.scrollLeft;
+      startScrollTop = container.scrollTop;
+      container.classList.add('n8n-sf-map-grabbing');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      event.preventDefault();
+    });
   }
 
   function escapeHtml(value) {
