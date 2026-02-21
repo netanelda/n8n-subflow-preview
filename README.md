@@ -25,7 +25,7 @@ Hover over any Execute Workflow node and instantly see a visual mini-map of the 
 ### 🔍 Hover Preview
 Hover over any Execute Workflow node to see a floating card showing the sub-workflow's structure — nodes, connections, and layout — rendered as an inline mini-map.
 
-<!-- SCREENSHOT: screenshots/hero-preview.png -->
+![Hover Preview](n8n-subflow-preview/screenshots/hero-preview.png)
 
 ### ↗ Open Subflow Button
 One click to open the sub-workflow in a new tab — directly from the hover preview header. No need to double-click the node and navigate through menus.
@@ -33,22 +33,22 @@ One click to open the sub-workflow in a new tab — directly from the hover prev
 ### 📋 Side Panel (Expanded View)
 Click "Expand" to open a resizable side panel with a larger workflow visualization, a full node list with types, the workflow description, and a direct link to open the full workflow. Drag the left edge to resize the panel to your preferred width — it's saved across sessions.
 
-<!-- SCREENSHOT: screenshots/side-panel.png -->
+![Side Panel](n8n-subflow-preview/screenshots/side-panel.png)
 
 ### 🔖 Visual Badges
 Execute Workflow nodes get a small badge indicator (↗) so you can instantly spot which nodes reference external workflows — even before hovering.
 
-<!-- SCREENSHOT: screenshots/badges.png -->
+![Badges](n8n-subflow-preview/screenshots/badges.png)
 
 ### ↔️ Draggable & Resizable Overlay
 The preview overlay can be dragged anywhere on screen and resized from any corner. Your preferred size is saved across sessions. The mini-map re-renders dynamically to fill whatever size you choose — giving node names and complex workflows more room to breathe.
 
-<!-- SCREENSHOT: screenshots/resize-drag.png -->
+![Resize and Drag](n8n-subflow-preview/screenshots/resize-drag.png)
 
 ### 🧭 Breadcrumb Navigation
 When you navigate into sub-workflows, a breadcrumb bar appears at the top showing your path — click any segment to jump back.
 
-<!-- SCREENSHOT: screenshots/breadcrumbs.png -->
+![Breadcrumbs](n8n-subflow-preview/screenshots/breadcrumbs.png)
 
 ### 🗺️ Pannable Mini-Maps
 For larger workflows, click and drag inside the mini-map to pan around and explore the full workflow structure — in both the hover overlay and the side panel.
@@ -86,7 +86,7 @@ The extension injects into n8n's workflow editor page and:
 
 3. **Enable Developer Mode** — Toggle the switch in the top-right corner
 
-4. **Load the extension** — Click "Load unpacked" and select the extension folder
+4. **Load the extension** — Click "Load unpacked" and select the `n8n-subflow-preview` folder
 
 5. **Navigate to n8n** — Open your n8n instance and go to any workflow with Execute Workflow nodes
 
