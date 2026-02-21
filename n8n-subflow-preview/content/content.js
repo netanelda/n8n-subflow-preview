@@ -10,8 +10,15 @@
   const HIDE_DELAY_MS = 200;
   const FADE_OUT_MS = 150;
   const OVERLAY_SAFETY_HIDE_MS = 8000;
-  const INLINE_OFFSET_X = 24;
-  const INLINE_OFFSET_Y = -26;
+  const OVERLAY_SIZE_STORAGE_KEY = 'n8n_subflow_overlay_size';
+  const OVERLAY_DEFAULT_MIN_WIDTH = 680;
+  const OVERLAY_DEFAULT_MAP_HEIGHT = 320;
+  const OVERLAY_AUTO_MAX_WIDTH = 750;
+  const OVERLAY_RESIZE_MIN_WIDTH = 500;
+  const OVERLAY_RESIZE_MIN_HEIGHT = 220;
+  const OVERLAY_RESIZE_MAX_RATIO = 0.9;
+  const OVERLAY_HEADER_HEIGHT = 36;
+  const OVERLAY_MAP_MIN_HEIGHT = 220;
 
   let currentWorkflowId = null;
   let currentWorkflowData = null;
@@ -22,6 +29,8 @@
   let inlineOverlayEl = null;
   let breadcrumbEl = null;
   let breadcrumbTrail = [];
+  let preferredOverlaySize = null;
+  let overlayManualRect = null;
   const workflowNamesById = new Map();
 
   // CDN-based Font Awesome SVG resolver (content script can fetch freely)
@@ -95,6 +104,7 @@
   const hoverState = {
     hoveringExecuteNode: false,
     overlayVisible: false,
+    overlayInteracting: false,
     activeSubflowId: null,
     activeRequestSeq: 0,
     cachedWorkflowData: null
@@ -137,10 +147,17 @@
   }
 
   async function loadSettings() {
-    const data = await chrome.storage.local.get(['hoverDelay', 'enableHover', 'enableBadges']);
+    const data = await chrome.storage.local.get([
+      'hoverDelay',
+      'enableHover',
+      'enableBadges',
+      OVERLAY_SIZE_STORAGE_KEY
+    ]);
     if (data.hoverDelay) settings.hoverDelay = data.hoverDelay;
     if (data.enableHover !== undefined) settings.enableHover = data.enableHover;
     if (data.enableBadges !== undefined) settings.enableBadges = data.enableBadges;
+    const savedOverlaySize = sanitizeOverlaySize(data[OVERLAY_SIZE_STORAGE_KEY]);
+    if (savedOverlaySize) preferredOverlaySize = savedOverlaySize;
   }
 
   function getWorkflowIdFromUrl() {
@@ -362,9 +379,11 @@
   }
 
   function scheduleHideOverlay() {
+    if (hoverState.overlayInteracting) return;
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       if (hoverState.hoveringExecuteNode) return;
+      if (hoverState.overlayInteracting) return;
       hideInlineOverlay();
     }, HIDE_DELAY_MS);
   }
@@ -372,8 +391,10 @@
   function hideInlineOverlay() {
     if (!inlineOverlayEl || !hoverState.overlayVisible) return;
     hoverState.overlayVisible = false;
+    hoverState.overlayInteracting = false;
     hoverState.activeSubflowId = null;
     hoverState.cachedWorkflowData = null;
+    inlineOverlayEl.classList.remove('dragging', 'resizing');
     clearTimeout(overlaySafetyTimer);
     inlineOverlayEl.classList.add('fading');
     inlineOverlayEl.classList.remove('visible');
@@ -389,6 +410,7 @@
     overlaySafetyTimer = window.setTimeout(() => {
       if (!hoverState.overlayVisible) return;
       if (hoverState.hoveringExecuteNode) return;
+      if (hoverState.overlayInteracting) return;
       hideInlineOverlay();
     }, OVERLAY_SAFETY_HIDE_MS);
   }
@@ -401,6 +423,7 @@
   }
 
   function onGlobalMouseMove(event) {
+    if (hoverState.overlayInteracting) return;
     if (!hoverState.overlayVisible || hoverState.hoveringExecuteNode) return;
     if (!activeNodeElement || !activeNodeElement.isConnected) {
       hideInlineOverlay();
@@ -546,6 +569,7 @@
       clearTimeout(hideTimer);
     });
     inlineOverlayEl.addEventListener('mouseleave', () => {
+      if (hoverState.overlayInteracting) return;
       hoverState.hoveringExecuteNode = false;
       scheduleHideOverlay();
     });
@@ -579,7 +603,7 @@
     ensureInlineOverlay();
     applyInlineTheme();
     inlineOverlayEl.classList.remove('fading');
-    inlineOverlayEl.style.width = Math.min(556, getOverlayMaxWidth()) + 'px';
+    inlineOverlayEl.style.width = getInitialOverlayWidth() + 'px';
     inlineOverlayEl.style.height = '';
     inlineOverlayEl.innerHTML = `
       ${buildOverlayHeader()}
@@ -598,7 +622,7 @@
     ensureInlineOverlay();
     applyInlineTheme();
     inlineOverlayEl.classList.remove('fading');
-    inlineOverlayEl.style.width = Math.min(556, getOverlayMaxWidth()) + 'px';
+    inlineOverlayEl.style.width = getInitialOverlayWidth() + 'px';
     inlineOverlayEl.style.height = '';
     const openUrl = subWorkflowId
       ? `${window.location.origin}/workflow/${encodeURIComponent(subWorkflowId)}`
@@ -637,6 +661,10 @@
         nodeCount: Array.isArray(workflowData.nodes) ? workflowData.nodes.length : 0
       })}
       <div class="n8n-sf-inline-map"></div>
+      <button type="button" class="n8n-sf-overlay-resize-handle dir-nw" data-dir="nw" title="Resize preview" aria-label="Resize preview">⟋</button>
+      <button type="button" class="n8n-sf-overlay-resize-handle dir-ne" data-dir="ne" title="Resize preview" aria-label="Resize preview">⟋</button>
+      <button type="button" class="n8n-sf-overlay-resize-handle dir-sw" data-dir="sw" title="Resize preview" aria-label="Resize preview">⟋</button>
+      <button type="button" class="n8n-sf-overlay-resize-handle dir-se" data-dir="se" title="Resize preview" aria-label="Resize preview">⟋</button>
     `;
 
     const mapContainer = inlineOverlayEl.querySelector('.n8n-sf-inline-map');
@@ -658,32 +686,39 @@
     }
     const nodeCount = Array.isArray(workflowData.nodes) ? workflowData.nodes.length : 0;
     const isLarge = nodeCount > 8;
-    PreviewRenderer.render(workflowData, mapContainer, {
-      theme: ThemeDetector.detect(),
-      width: isLarge ? 720 : 556,
-      height: isLarge ? 320 : 260,
-      nodeWidth: 72,
-      nodeHeight: 64,
-      totalNodeHeight: 82,
-      pad: 24
-    });
-    setupMapPan(mapContainer);
+    const preferredSize = getClampedPreferredOverlaySize();
+    const initialOverlayWidth = preferredSize
+      ? preferredSize.width
+      : (isLarge ? 720 : OVERLAY_DEFAULT_MIN_WIDTH);
+    const initialOverlayHeight = preferredSize ? preferredSize.height : (OVERLAY_HEADER_HEIGHT + OVERLAY_DEFAULT_MAP_HEIGHT);
 
-    // Size overlay to fit map (no scrolling); cap at viewport
+    renderOverlayMapToSize(mapContainer, workflowData, initialOverlayWidth, initialOverlayHeight);
+
+    // Size overlay to fit map and header; default max stays compact unless user resizes.
     const wrapper = mapContainer.firstElementChild;
     if (wrapper) {
       const mapW = wrapper.offsetWidth;
       const mapH = wrapper.offsetHeight;
-      const maxW = getOverlayMaxWidth();
-      const maxH = Math.min(420, Math.floor(window.innerHeight * 0.8));
-      const headerH = 36;
       const headerEl = inlineOverlayEl.querySelector('.n8n-sf-overlay-header');
-      const headerW = headerEl ? Math.ceil(headerEl.scrollWidth + 12) : 0;
-      const overlayW = Math.min(Math.max(mapW, headerW, 556), maxW);
-      const overlayH = Math.min(headerH + mapH, maxH);
-      inlineOverlayEl.style.width = overlayW + 'px';
-      inlineOverlayEl.style.height = overlayH + 'px';
+      const headerW = headerEl ? Math.ceil(headerEl.scrollWidth + 14) : 0;
+
+      let overlayW = initialOverlayWidth;
+      let overlayH = initialOverlayHeight;
+      if (!preferredSize) {
+        const maxW = getOverlayAutoMaxWidth();
+        const maxH = Math.min(420, Math.floor(window.innerHeight * 0.8));
+        overlayW = Math.min(Math.max(mapW, headerW, OVERLAY_DEFAULT_MIN_WIDTH), maxW);
+        overlayH = Math.min(OVERLAY_HEADER_HEIGHT + mapH, maxH);
+      }
+
+      const clamped = clampOverlaySize(overlayW, overlayH, true);
+      inlineOverlayEl.style.width = clamped.width + 'px';
+      inlineOverlayEl.style.height = clamped.height + 'px';
+      renderOverlayMapToSize(mapContainer, workflowData, clamped.width, clamped.height);
     }
+
+    bindOverlayResizeHandles(mapContainer, workflowData);
+    bindOverlayDragBehavior();
 
     positionInlineOverlay();
     inlineOverlayEl.classList.add('visible');
@@ -700,6 +735,12 @@
 
   function positionInlineOverlay() {
     if (!inlineOverlayEl) return;
+    if (overlayManualRect) {
+      const clamped = clampOverlayRect(overlayManualRect, true);
+      applyOverlayRect(clamped);
+      overlayManualRect = clamped;
+      return;
+    }
     // Bottom-center dock: always sits at the bottom of the viewport, out of the way
     const overlayWidth = inlineOverlayEl.offsetWidth || 580;
     let left = Math.max(12, (window.innerWidth - overlayWidth) / 2);
@@ -721,6 +762,39 @@
     inlineOverlayEl.style.bottom = `${bottom}px`;
   }
 
+  function beginOverlayInteraction() {
+    hoverState.overlayInteracting = true;
+    hoverState.hoveringExecuteNode = true;
+    clearTimeout(hideTimer);
+    clearTimeout(overlaySafetyTimer);
+  }
+
+  function endOverlayInteraction(event) {
+    hoverState.overlayInteracting = false;
+    const keepOpen = isPointerOverOverlay(event) || isPointerOverNode(event);
+    hoverState.hoveringExecuteNode = keepOpen;
+    if (!keepOpen) scheduleHideOverlay();
+    resetOverlaySafetyTimer();
+  }
+
+  function isPointerOverOverlay(event) {
+    if (!event || !inlineOverlayEl || !inlineOverlayEl.classList.contains('visible')) return false;
+    const rect = inlineOverlayEl.getBoundingClientRect();
+    return event.clientX >= rect.left
+      && event.clientX <= rect.right
+      && event.clientY >= rect.top
+      && event.clientY <= rect.bottom;
+  }
+
+  function isPointerOverNode(event) {
+    if (!event || !activeNodeElement || !activeNodeElement.isConnected) return false;
+    const rect = activeNodeElement.getBoundingClientRect();
+    return event.clientX >= rect.left
+      && event.clientX <= rect.right
+      && event.clientY >= rect.top
+      && event.clientY <= rect.bottom;
+  }
+
   function getVisibleSidePanelWidth() {
     const sidePanel = document.querySelector('.n8n-sf-side-panel.visible');
     if (!sidePanel) return 0;
@@ -728,17 +802,262 @@
     return rect.width || 0;
   }
 
-  function getOverlayMaxWidth() {
-    const baseMax = Math.min(750, Math.floor(window.innerWidth * 0.92));
+  function getOverlayViewportBounds() {
     const sidePanelWidth = getVisibleSidePanelWidth();
-    if (!sidePanelWidth) return Math.max(320, baseMax);
-    const noOverlapMax = Math.floor(window.innerWidth - sidePanelWidth - 32);
-    return Math.max(320, Math.min(baseMax, noOverlapMax));
+    const leftMin = 12;
+    const rightMax = Math.max(leftMin + OVERLAY_RESIZE_MIN_WIDTH, Math.floor(window.innerWidth - (sidePanelWidth > 0 ? sidePanelWidth + 20 : 12)));
+    const topMin = 12;
+    const bottomMax = Math.max(topMin + OVERLAY_RESIZE_MIN_HEIGHT, Math.floor(window.innerHeight - 12));
+    return { leftMin, rightMax, topMin, bottomMax };
+  }
+
+  function getOverlayNoOverlapMaxWidth() {
+    const bounds = getOverlayViewportBounds();
+    return Math.max(320, bounds.rightMax - bounds.leftMin);
+  }
+
+  function getOverlayAutoMaxWidth() {
+    const baseMax = Math.min(OVERLAY_AUTO_MAX_WIDTH, Math.floor(window.innerWidth * 0.92));
+    return Math.max(320, Math.min(baseMax, getOverlayNoOverlapMaxWidth()));
+  }
+
+  function getOverlayResizeMaxWidth() {
+    const viewportMax = Math.floor(window.innerWidth * OVERLAY_RESIZE_MAX_RATIO);
+    return Math.max(OVERLAY_RESIZE_MIN_WIDTH, Math.min(viewportMax, getOverlayNoOverlapMaxWidth()));
+  }
+
+  function getOverlayResizeMaxHeight() {
+    return Math.max(OVERLAY_RESIZE_MIN_HEIGHT, Math.floor(window.innerHeight * OVERLAY_RESIZE_MAX_RATIO));
+  }
+
+  function sanitizeOverlaySize(value) {
+    if (!value || typeof value !== 'object') return null;
+    const width = Number(value.width);
+    const height = Number(value.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return { width, height };
+  }
+
+  function clampOverlaySize(width, height, useResizeBounds) {
+    const minW = useResizeBounds ? OVERLAY_RESIZE_MIN_WIDTH : OVERLAY_DEFAULT_MIN_WIDTH;
+    const minH = useResizeBounds ? OVERLAY_RESIZE_MIN_HEIGHT : (OVERLAY_HEADER_HEIGHT + OVERLAY_MAP_MIN_HEIGHT);
+    const maxW = useResizeBounds ? getOverlayResizeMaxWidth() : getOverlayAutoMaxWidth();
+    const maxH = useResizeBounds
+      ? getOverlayResizeMaxHeight()
+      : Math.min(420, Math.floor(window.innerHeight * 0.8));
+    const safeW = Math.min(maxW, Math.max(minW, Math.round(width || minW)));
+    const safeH = Math.min(maxH, Math.max(minH, Math.round(height || minH)));
+    return { width: safeW, height: safeH };
+  }
+
+  function clampOverlayRect(rect, useResizeBounds) {
+    const bounds = getOverlayViewportBounds();
+    const size = clampOverlaySize(rect.width, rect.height, useResizeBounds);
+    const maxLeft = bounds.rightMax - size.width;
+    const maxTop = bounds.bottomMax - size.height;
+    return {
+      left: Math.min(maxLeft, Math.max(bounds.leftMin, Math.round(rect.left))),
+      top: Math.min(maxTop, Math.max(bounds.topMin, Math.round(rect.top))),
+      width: size.width,
+      height: size.height
+    };
+  }
+
+  function applyOverlayRect(rect) {
+    if (!inlineOverlayEl) return;
+    inlineOverlayEl.style.left = rect.left + 'px';
+    inlineOverlayEl.style.top = rect.top + 'px';
+    inlineOverlayEl.style.bottom = '';
+    inlineOverlayEl.style.width = rect.width + 'px';
+    inlineOverlayEl.style.height = rect.height + 'px';
+  }
+
+  function getCurrentOverlayRect() {
+    if (!inlineOverlayEl) return null;
+    const rect = inlineOverlayEl.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  function getInitialOverlayWidth() {
+    const preferred = getClampedPreferredOverlaySize();
+    if (preferred) return preferred.width;
+    return Math.min(OVERLAY_DEFAULT_MIN_WIDTH, getOverlayAutoMaxWidth());
+  }
+
+  function getClampedPreferredOverlaySize() {
+    if (!preferredOverlaySize) return null;
+    return clampOverlaySize(preferredOverlaySize.width, preferredOverlaySize.height, true);
+  }
+
+  function persistOverlaySize(width, height) {
+    const size = clampOverlaySize(width, height, true);
+    preferredOverlaySize = size;
+    try {
+      chrome.storage.local.set({ [OVERLAY_SIZE_STORAGE_KEY]: size });
+    } catch (_err) {
+      // Ignore storage edge cases.
+    }
+  }
+
+  function renderOverlayMapToSize(mapContainer, workflowData, overlayWidth, overlayHeight) {
+    if (!mapContainer || !workflowData) return;
+    const mapHeight = Math.max(OVERLAY_MAP_MIN_HEIGHT, Math.round(overlayHeight - OVERLAY_HEADER_HEIGHT));
+    const mapWidth = Math.max(320, Math.round(overlayWidth));
+    PreviewRenderer.render(workflowData, mapContainer, {
+      theme: ThemeDetector.detect(),
+      width: mapWidth,
+      height: mapHeight,
+      nodeWidth: 72,
+      nodeHeight: 64,
+      totalNodeHeight: 96,
+      pad: 24
+    });
+    setupMapPan(mapContainer);
+  }
+
+  function bindOverlayResizeHandles(mapContainer, workflowData) {
+    if (!inlineOverlayEl || !mapContainer || !workflowData) return;
+    const handles = inlineOverlayEl.querySelectorAll('.n8n-sf-overlay-resize-handle[data-dir]');
+    if (!handles.length) return;
+
+    handles.forEach((handle) => {
+      handle.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        const dir = handle.getAttribute('data-dir') || 'se';
+        const startRect = getCurrentOverlayRect();
+        if (!startRect) return;
+
+        let dragging = true;
+        let rafId = 0;
+        let pendingRect = null;
+        beginOverlayInteraction();
+        inlineOverlayEl.classList.add('resizing');
+        overlayManualRect = clampOverlayRect(startRect, true);
+        applyOverlayRect(overlayManualRect);
+
+        const flushResize = () => {
+          rafId = 0;
+          if (!pendingRect) return;
+          const rect = pendingRect;
+          pendingRect = null;
+          overlayManualRect = rect;
+          applyOverlayRect(rect);
+          renderOverlayMapToSize(mapContainer, workflowData, rect.width, rect.height);
+        };
+
+        const onMove = (moveEvent) => {
+          if (!dragging) return;
+          const dx = moveEvent.clientX - event.clientX;
+          const dy = moveEvent.clientY - event.clientY;
+          const next = {
+            left: startRect.left,
+            top: startRect.top,
+            width: startRect.width,
+            height: startRect.height
+          };
+
+          if (dir.indexOf('e') !== -1) next.width = startRect.width + dx;
+          if (dir.indexOf('w') !== -1) {
+            next.width = startRect.width - dx;
+            next.left = startRect.left + dx;
+          }
+          if (dir.indexOf('s') !== -1) next.height = startRect.height + dy;
+          if (dir.indexOf('n') !== -1) {
+            next.height = startRect.height - dy;
+            next.top = startRect.top + dy;
+          }
+
+          pendingRect = clampOverlayRect(next, true);
+          if (!rafId) rafId = window.requestAnimationFrame(flushResize);
+          moveEvent.preventDefault();
+        };
+
+        const onUp = (upEvent) => {
+          if (!dragging) return;
+          dragging = false;
+          inlineOverlayEl.classList.remove('resizing');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          if (rafId) {
+            window.cancelAnimationFrame(rafId);
+            rafId = 0;
+          }
+          if (pendingRect) {
+            overlayManualRect = pendingRect;
+            applyOverlayRect(pendingRect);
+            renderOverlayMapToSize(mapContainer, workflowData, pendingRect.width, pendingRect.height);
+            persistOverlaySize(pendingRect.width, pendingRect.height);
+            pendingRect = null;
+          } else if (overlayManualRect) {
+            persistOverlaySize(overlayManualRect.width, overlayManualRect.height);
+          }
+          endOverlayInteraction(upEvent);
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    });
+  }
+
+  function bindOverlayDragBehavior() {
+    if (!inlineOverlayEl) return;
+    const header = inlineOverlayEl.querySelector('.n8n-sf-overlay-header');
+    if (!header) return;
+
+    header.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      const targetEl = event.target instanceof Element ? event.target : null;
+      if (targetEl && targetEl.closest('.n8n-sf-overlay-actions, .n8n-sf-overlay-resize-handle')) return;
+
+      const startRect = getCurrentOverlayRect();
+      if (!startRect) return;
+      let dragging = true;
+      beginOverlayInteraction();
+      inlineOverlayEl.classList.add('dragging');
+      overlayManualRect = clampOverlayRect(startRect, true);
+      applyOverlayRect(overlayManualRect);
+
+      const onMove = (moveEvent) => {
+        if (!dragging) return;
+        const next = clampOverlayRect({
+          left: startRect.left + (moveEvent.clientX - event.clientX),
+          top: startRect.top + (moveEvent.clientY - event.clientY),
+          width: startRect.width,
+          height: startRect.height
+        }, true);
+        overlayManualRect = next;
+        applyOverlayRect(next);
+        moveEvent.preventDefault();
+      };
+
+      const onUp = (upEvent) => {
+        if (!dragging) return;
+        dragging = false;
+        inlineOverlayEl.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        endOverlayInteraction(upEvent);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      event.preventDefault();
+    });
   }
 
   // Drag-to-pan for overflowed mini-maps (X + Y) without scrollbars.
   function setupMapPan(container) {
     if (!container) return;
+    if (container.dataset.panBound === 'true') return;
+    container.dataset.panBound = 'true';
     container.classList.add('n8n-sf-pannable-map');
     let startX = 0;
     let startY = 0;
@@ -751,17 +1070,19 @@
       container.scrollLeft = startScrollLeft + startX - event.clientX;
       container.scrollTop = startScrollTop + startY - event.clientY;
     };
-    const onUp = () => {
+    const onUp = (upEvent) => {
       if (!dragging) return;
       dragging = false;
       container.classList.remove('n8n-sf-map-grabbing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      endOverlayInteraction(upEvent);
     };
 
     container.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
       dragging = true;
+      beginOverlayInteraction();
       startX = event.clientX;
       startY = event.clientY;
       startScrollLeft = container.scrollLeft;

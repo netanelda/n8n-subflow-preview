@@ -6,7 +6,7 @@ const PreviewRenderer = (() => {
   const DEFAULT_HEIGHT = 260;
   const DEFAULT_NODE_W = 72;
   const DEFAULT_NODE_H = 64;
-  const DEFAULT_TOTAL_H = 82; // card (64) + name below (18)
+  const DEFAULT_TOTAL_H = 96; // card (64) + up to two-line name label below
   const DEFAULT_PAD = 24;
   // Never squeeze below this scale so cards don't overlap in dense workflows
   const MIN_SCALE = 0.5;
