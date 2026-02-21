@@ -42,7 +42,7 @@ const SidePanel = (() => {
     }
   }
 
-  function open(workflowData, workflowId, theme) {
+  function open(workflowData, workflowId, theme, openUrlOverride) {
     ensurePanel();
     const resolvedTheme = theme || ThemeDetector.detect() || 'dark';
     panelEl.classList.remove('theme-light', 'theme-dark');
@@ -62,7 +62,7 @@ const SidePanel = (() => {
       if (ax !== bx) return ax - bx;
       return ay - by;
     });
-    const openUrl = `${window.location.origin}/workflow/${encodeURIComponent(workflowId || '')}`;
+    const openUrl = buildSafeOpenUrl(workflowId, openUrlOverride);
 
     body.innerHTML = `
       ${description ? `<p class="n8n-sf-sp-description">${description}</p>` : ''}
@@ -203,6 +203,19 @@ const SidePanel = (() => {
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') close();
     });
+  }
+
+  function buildSafeOpenUrl(workflowId, overrideUrl) {
+    const fallback = `${window.location.origin}/workflow/${encodeURIComponent(workflowId || '')}`;
+    if (!overrideUrl || typeof overrideUrl !== 'string') return fallback;
+    try {
+      const parsed = new URL(overrideUrl, window.location.origin);
+      if (parsed.origin !== window.location.origin) return fallback;
+      if (!parsed.pathname.startsWith('/workflow/')) return fallback;
+      return parsed.toString();
+    } catch (_err) {
+      return fallback;
+    }
   }
 
   function escapeHtml(value) {

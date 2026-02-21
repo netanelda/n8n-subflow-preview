@@ -19,6 +19,7 @@
   const OVERLAY_RESIZE_MAX_RATIO = 0.9;
   const OVERLAY_HEADER_HEIGHT = 36;
   const OVERLAY_MAP_MIN_HEIGHT = 220;
+  const BREADCRUMB_STORAGE_KEY = 'n8n_subflow_breadcrumb_trail';
 
   let currentWorkflowId = null;
   let currentWorkflowData = null;
@@ -31,6 +32,7 @@
   let breadcrumbTrail = [];
   let preferredOverlaySize = null;
   let overlayManualRect = null;
+  let breadcrumbsEnabled = false;
   const workflowNamesById = new Map();
 
   // CDN-based Font Awesome SVG resolver (content script can fetch freely)
@@ -123,14 +125,16 @@
 
     currentWorkflowId = getWorkflowIdFromUrl();
     if (!currentWorkflowId) return;
+    initializeBreadcrumbContext();
 
     console.log(`${LOG_PREFIX} active — workflow ${currentWorkflowId}`);
 
     loadSettings().then(() => {
       ensureInlineOverlay();
-      ensureBreadcrumbBar();
-      breadcrumbTrail = loadBreadcrumbTrail();
-      syncBreadcrumbTrail(currentWorkflowId);
+      if (breadcrumbsEnabled) {
+        ensureBreadcrumbBar();
+        syncBreadcrumbTrail(currentWorkflowId);
+      }
       listenForProbeResults();
       observeCanvas();
       requestProbeRefresh();
@@ -196,7 +200,7 @@
         hoverState.hoveringExecuteNode = false;
         hoverState.activeRequestSeq++;
         hideInlineOverlay();
-        syncBreadcrumbTrail(currentWorkflowId);
+        if (breadcrumbsEnabled) syncBreadcrumbTrail(currentWorkflowId);
         requestProbeRefresh();
       }
     });
@@ -205,6 +209,51 @@
 
   function requestProbeRefresh() {
     window.postMessage({ type: 'n8n-subflow-probe-request' }, '*');
+  }
+
+  function initializeBreadcrumbContext() {
+    const params = new URLSearchParams(window.location.search);
+    breadcrumbsEnabled = params.get('sfbc') === '1';
+    if (!breadcrumbsEnabled) {
+      breadcrumbTrail = [];
+      return;
+    }
+
+    const trailFromUrl = parseBreadcrumbTrailParam(params.get('sftrail'));
+    breadcrumbTrail = trailFromUrl.length > 0 ? trailFromUrl : loadBreadcrumbTrail();
+  }
+
+  function isValidWorkflowId(id) {
+    return typeof id === 'string' && /^[a-zA-Z0-9]+$/.test(id);
+  }
+
+  function parseBreadcrumbTrailParam(rawTrail) {
+    if (!rawTrail || typeof rawTrail !== 'string') return [];
+    return rawTrail
+      .split(',')
+      .map((item) => item.trim())
+      .filter(isValidWorkflowId)
+      .slice(-8);
+  }
+
+  function getOutboundBreadcrumbTrail() {
+    const base = breadcrumbsEnabled ? breadcrumbTrail.slice() : [];
+    if (isValidWorkflowId(currentWorkflowId)) {
+      const last = base[base.length - 1];
+      if (last !== currentWorkflowId) base.push(currentWorkflowId);
+    }
+    return base.filter(isValidWorkflowId).slice(-8);
+  }
+
+  function buildSubflowOpenUrl(subWorkflowId) {
+    if (!isValidWorkflowId(subWorkflowId)) return '';
+    const url = new URL(`${window.location.origin}/workflow/${encodeURIComponent(subWorkflowId)}`);
+    url.searchParams.set('sfbc', '1');
+    const trail = getOutboundBreadcrumbTrail();
+    if (trail.length > 0) {
+      url.searchParams.set('sftrail', trail.join(','));
+    }
+    return url.toString();
   }
 
   function listenForProbeResults() {
@@ -216,7 +265,7 @@
         if (event.data.payload) {
           currentWorkflowData = event.data.payload;
           registerWorkflowMeta(currentWorkflowId, event.data.payload.name);
-          syncBreadcrumbTrail(currentWorkflowId);
+          if (breadcrumbsEnabled) syncBreadcrumbTrail(currentWorkflowId);
           WorkflowCache.set(currentWorkflowId, currentWorkflowData);
           scanForExecuteWorkflowNodes();
         } else {
@@ -263,7 +312,7 @@
 
     currentWorkflowData = res.data;
     registerWorkflowMeta(currentWorkflowId, res.data.name);
-    syncBreadcrumbTrail(currentWorkflowId);
+    if (breadcrumbsEnabled) syncBreadcrumbTrail(currentWorkflowId);
     await WorkflowCache.set(currentWorkflowId, res.data);
     scanForExecuteWorkflowNodes();
   }
@@ -487,10 +536,13 @@
 
   function loadBreadcrumbTrail() {
     try {
-      const raw = sessionStorage.getItem('n8n_subflow_breadcrumb_trail');
+      const raw = localStorage.getItem(BREADCRUMB_STORAGE_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter(isValidWorkflowId)
+        .slice(-8);
     } catch (_err) {
       return [];
     }
@@ -498,7 +550,10 @@
 
   function saveBreadcrumbTrail() {
     try {
-      sessionStorage.setItem('n8n_subflow_breadcrumb_trail', JSON.stringify(breadcrumbTrail.slice(-8)));
+      const safeTrail = breadcrumbTrail
+        .filter(isValidWorkflowId)
+        .slice(-8);
+      localStorage.setItem(BREADCRUMB_STORAGE_KEY, JSON.stringify(safeTrail));
     } catch (_err) {
       // ignore storage edge cases
     }
@@ -527,6 +582,11 @@
 
   function renderBreadcrumbBar() {
     if (!breadcrumbEl) return;
+    if (!breadcrumbsEnabled) {
+      breadcrumbEl.classList.remove('visible');
+      breadcrumbEl.innerHTML = '';
+      return;
+    }
     if (breadcrumbTrail.length <= 1) {
       breadcrumbEl.classList.remove('visible');
       breadcrumbEl.innerHTML = '';
@@ -540,7 +600,7 @@
       if (isLast) {
         return `<span class="current">${safeName}</span>`;
       }
-      return `<a href="#" data-workflow-id="${escapeHtml(id)}">${safeName}</a>`;
+      return `<a href="#" data-workflow-id="${escapeHtml(id)}" data-breadcrumb-index="${index}">${safeName}</a>`;
     });
 
     breadcrumbEl.innerHTML = `<span class="home">🏠</span> ${segments.join('<span class="sep">›</span>')}`;
@@ -551,7 +611,17 @@
         event.preventDefault();
         const targetId = linkEl.getAttribute('data-workflow-id');
         if (!targetId) return;
-        window.location.href = `${window.location.origin}/workflow/${encodeURIComponent(targetId)}`;
+        const targetIndex = Number(linkEl.getAttribute('data-breadcrumb-index'));
+        const baseTrail = Number.isInteger(targetIndex)
+          ? breadcrumbTrail.slice(0, Math.max(0, targetIndex))
+          : breadcrumbTrail.slice(0, -1);
+        const url = new URL(`${window.location.origin}/workflow/${encodeURIComponent(targetId)}`);
+        url.searchParams.set('sfbc', '1');
+        const safeTrail = baseTrail.filter(isValidWorkflowId).slice(-8);
+        if (safeTrail.length > 0) {
+          url.searchParams.set('sftrail', safeTrail.join(','));
+        }
+        window.location.href = url.toString();
       });
     });
   }
@@ -584,9 +654,9 @@
     const nodeCountBadge = Number.isFinite(nodeCount) && nodeCount >= 0
       ? ` <span class="n8n-sf-overlay-node-count">${nodeCount} ${nodeCount === 1 ? 'node' : 'nodes'}</span>`
       : '';
-    const openUrl = options.subWorkflowId
+    const openUrl = options.openUrl || (options.subWorkflowId
       ? `${window.location.origin}/workflow/${encodeURIComponent(options.subWorkflowId)}`
-      : '';
+      : '');
     const openBtn = options.showOpen && openUrl
       ? `<a class="n8n-sf-overlay-open" href="${openUrl}" target="_blank" rel="noopener noreferrer" title="Open sub-workflow in new tab" aria-label="Open sub-workflow in new tab">↗ <span>Open Subflow</span></a>`
       : '';
@@ -624,9 +694,7 @@
     inlineOverlayEl.classList.remove('fading');
     inlineOverlayEl.style.width = getInitialOverlayWidth() + 'px';
     inlineOverlayEl.style.height = '';
-    const openUrl = subWorkflowId
-      ? `${window.location.origin}/workflow/${encodeURIComponent(subWorkflowId)}`
-      : '';
+    const openUrl = subWorkflowId ? buildSubflowOpenUrl(subWorkflowId) : '';
     inlineOverlayEl.innerHTML = `
       ${buildOverlayHeader()}
       <div class="n8n-sf-inline-hint">
@@ -658,6 +726,7 @@
         showOpen: true,
         showExpand: true,
         subWorkflowId,
+        openUrl: buildSubflowOpenUrl(subWorkflowId),
         nodeCount: Array.isArray(workflowData.nodes) ? workflowData.nodes.length : 0
       })}
       <div class="n8n-sf-inline-map"></div>
@@ -680,7 +749,12 @@
         e.stopPropagation();
         e.preventDefault();
         if (hoverState.cachedWorkflowData && hoverState.activeSubflowId) {
-          SidePanel.open(hoverState.cachedWorkflowData, hoverState.activeSubflowId, ThemeDetector.detect());
+          SidePanel.open(
+            hoverState.cachedWorkflowData,
+            hoverState.activeSubflowId,
+            ThemeDetector.detect(),
+            buildSubflowOpenUrl(hoverState.activeSubflowId)
+          );
         }
       });
     }
