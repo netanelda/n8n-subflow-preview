@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>n8n SubFlow Preview</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <svg class="logo" width="28" height="28" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="4" y="4" width="120" height="120" rx="24" fill="#ff6d5a" fill-opacity="0.12"/>
+        <rect x="16" y="44" width="28" height="28" rx="7" fill="#ff6d5a"/>
+        <rect x="84" y="24" width="28" height="28" rx="7" fill="#ff6d5a"/>
+        <rect x="84" y="68" width="28" height="28" rx="7" fill="#ff6d5a" fill-opacity="0.6"/>
+        <line x1="44" y1="58" x2="84" y2="38" stroke="#ff6d5a" stroke-width="3" stroke-linecap="round"/>
+        <line x1="44" y1="58" x2="84" y2="82" stroke="#ff6d5a" stroke-width="3" stroke-linecap="round" stroke-opacity="0.6"/>
+      </svg>
+      <h1>SubFlow Preview</h1>
+    </div>
+    <p class="subtitle">Hover any Execute Workflow node to preview its sub-workflow inline.</p>
+
+    <div class="field">
+      <label for="hoverDelay">Preview Delay: <span id="delayValue">400</span>ms</label>
+      <input type="range" id="hoverDelay" min="200" max="1000" step="50" value="400">
+    </div>
+
+    <div class="field">
+      <label for="theme">Theme</label>
+      <select id="theme">
+        <option value="auto">Auto-detect</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </div>
+
+    <fieldset class="field">
+      <legend>Features</legend>
+      <label class="toggle"><input type="checkbox" id="enableHover" checked> Hover preview</label>
+      <label class="toggle"><input type="checkbox" id="enableBadges" checked> Node badges</label>
+      <label class="toggle"><input type="checkbox" id="enableBreadcrumbs" checked> Breadcrumbs</label>
+    </fieldset>
+
+    <button id="saveBtn">Save Settings</button>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

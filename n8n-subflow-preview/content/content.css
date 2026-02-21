@@ -1,0 +1,580 @@
+/* n8n SubFlow Preview — badges, inline overlay, HTML nodes, panels, breadcrumbs */
+
+/* ---- Badge on Execute Workflow nodes ---- */
+.n8n-subflow-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  background: #ff6d5a;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #fff;
+  pointer-events: none;
+  z-index: 20;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  animation: n8n-sf-badge-pulse 900ms ease-out;
+}
+
+@keyframes n8n-sf-badge-pulse {
+  0% { transform: scale(0.7); opacity: 0.2; }
+  70% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ---- Inline overlay (bottom-docked card, width/height set by JS to fit map) ---- */
+.n8n-subflow-inline-overlay {
+  position: fixed;
+  z-index: 99999;
+  min-width: 556px;
+  width: 556px;
+  padding: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #d0d5dd;
+  box-shadow: 0 8px 32px rgba(16, 24, 40, 0.14), 0 2px 8px rgba(16, 24, 40, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.n8n-subflow-inline-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.n8n-subflow-inline-overlay.fading {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+}
+
+/* Header label inside the overlay card */
+.n8n-sf-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #667085;
+  border-bottom: 1px solid #e4e7ec;
+  background: rgba(249, 250, 251, 0.8);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.n8n-sf-overlay-header .n8n-sf-overlay-wf-name {
+  color: #344054;
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.n8n-sf-overlay-header-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.n8n-sf-overlay-expand {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.n8n-sf-overlay-expand:hover {
+  background: rgba(102, 112, 133, 0.12);
+  color: #344054;
+}
+
+.theme-dark .n8n-sf-overlay-expand {
+  color: #8b92a5;
+}
+
+.theme-dark .n8n-sf-overlay-expand:hover {
+  background: rgba(139, 146, 165, 0.2);
+  color: #c8cdd8;
+}
+
+.n8n-sf-inline-map {
+  width: 100%;
+  min-height: 220px;
+  overflow: hidden;
+}
+
+/* ---- Dark theme for overlay card ---- */
+.n8n-subflow-inline-overlay.theme-dark {
+  background: rgba(30, 32, 40, 0.97);
+  border-color: #404759;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.theme-dark .n8n-sf-overlay-header {
+  color: #8b92a5;
+  border-bottom-color: #343949;
+  background: rgba(26, 28, 36, 0.8);
+}
+
+.theme-dark .n8n-sf-overlay-header .n8n-sf-overlay-wf-name {
+  color: #c8cdd8;
+}
+
+/* ---- Loading / error states inside overlay ---- */
+.n8n-sf-inline-loading {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: #3d4455;
+}
+
+.n8n-sf-inline-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 14px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(180, 35, 24, 0.25);
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  color: #b42318;
+  box-shadow: 0 2px 10px rgba(22, 31, 47, 0.10);
+}
+
+.n8n-sf-inline-hint a {
+  color: #ff6d5a;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.n8n-sf-inline-hint a:hover {
+  text-decoration: underline;
+}
+
+.theme-dark .n8n-sf-inline-loading {
+  color: #b8becf;
+}
+
+.theme-dark .n8n-sf-inline-hint {
+  background: rgba(26, 28, 36, 0.94);
+  border-color: rgba(255, 174, 165, 0.35);
+  color: #ffaea5;
+}
+
+.theme-dark .n8n-sf-inline-hint a {
+  color: #ffb4aa;
+}
+
+.n8n-sf-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(127, 127, 127, 0.35);
+  border-top-color: #ff6d5a;
+  border-radius: 50%;
+  animation: n8n-sf-spin 700ms linear infinite;
+}
+
+@keyframes n8n-sf-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ---- HTML node cards (replicate n8n native square-card look) ---- */
+.n8n-sf-map-wrap {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Absolute-positioned outer wrapper: card + name below as one unit */
+.n8n-sf-node-outer {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Square card body */
+.n8n-sf-html-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1.5px solid #d0d5dd;
+  box-shadow: 0 2px 5px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  box-sizing: border-box;
+  cursor: default;
+}
+
+/* Centered icon circle inside the card */
+.n8n-sf-html-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: #fff;
+  overflow: hidden;
+}
+
+/* Real n8n node icon image (replaces emoji glyph when available) */
+.n8n-sf-html-icon-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+
+.n8n-sf-html-icon.kind-trigger { background: #34a853; }
+.n8n-sf-html-icon.kind-action  { background: #1a73e8; }
+.n8n-sf-html-icon.kind-logic   { background: #f29900; }
+.n8n-sf-html-icon.kind-ai      { background: #7b61ff; }
+.n8n-sf-html-icon.kind-data    { background: #0f9d58; }
+.n8n-sf-html-icon.kind-http    { background: #e8710a; }
+.n8n-sf-html-icon.kind-native  {
+  background: #f2f4f7;
+  border: 1px solid #d0d5dd;
+}
+
+/* Name label below the card */
+.n8n-sf-html-name {
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #1d2434;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+  line-height: 1.25;
+}
+
+/* Connection lines (SVG layer behind cards) */
+.n8n-sf-conn-layer .n8n-sf-conn {
+  fill: none;
+  stroke: #b0b8c9;
+  stroke-width: 1.6;
+}
+
+.n8n-sf-conn-layer .n8n-sf-conn-dot {
+  fill: #b0b8c9;
+}
+
+/* ---- Dark theme overrides ---- */
+.n8n-sf-map-wrap.theme-dark .n8n-sf-html-node {
+  background: #262b38;
+  border-color: #404759;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+}
+
+.n8n-sf-map-wrap.theme-dark .n8n-sf-html-name {
+  color: #c8cdd8;
+}
+
+.n8n-sf-map-wrap.theme-dark .n8n-sf-conn {
+  stroke: #5a6378;
+}
+
+.n8n-sf-map-wrap.theme-dark .n8n-sf-conn-dot {
+  fill: #5a6378;
+}
+
+.n8n-sf-map-wrap.theme-dark .n8n-sf-html-icon.kind-native {
+  background: #2a3040;
+  border-color: #4b5568;
+}
+
+/* ---- Side panel (Chunk 3) ---- */
+.n8n-sf-side-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 420px;
+  height: 100vh;
+  z-index: 99998;
+  border-left: 1px solid #343949;
+  transform: translateX(100%);
+  transition: transform 220ms ease-out;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+
+.n8n-sf-side-panel.visible {
+  transform: translateX(0);
+}
+
+/* Dark theme (default, matches overlay dark) */
+.n8n-sf-side-panel.theme-dark {
+  background: rgba(30, 32, 40, 0.98);
+  color: #e7eaf3;
+  border-left-color: #404759;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-header {
+  border-bottom-color: #343949;
+  background: rgba(26, 28, 36, 0.8);
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-title {
+  color: #c8cdd8;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-close {
+  color: #8b92a5;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-close:hover {
+  color: #c8cdd8;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-description {
+  color: #8b92a5;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-subtitle {
+  color: #c8cdd8;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-list li {
+  border-color: #343949;
+  color: #e7eaf3;
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-list li span {
+  color: #8b92a5;
+}
+
+/* Light theme (matches overlay light) */
+.n8n-sf-side-panel.theme-light {
+  background: rgba(255, 255, 255, 0.98);
+  color: #344054;
+  border-left-color: #e4e7ec;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-header {
+  border-bottom-color: #e4e7ec;
+  background: rgba(249, 250, 251, 0.9);
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-title {
+  color: #344054;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-close {
+  color: #667085;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-close:hover {
+  color: #344054;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-description {
+  color: #667085;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-subtitle {
+  color: #344054;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-list li {
+  border-color: #e4e7ec;
+  color: #344054;
+}
+
+.n8n-sf-side-panel.theme-light .n8n-sf-sp-list li span {
+  color: #667085;
+}
+
+.n8n-sf-sp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid transparent;
+}
+
+.n8n-sf-sp-title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.n8n-sf-sp-close {
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.n8n-sf-sp-close:hover {
+  background: rgba(102, 112, 133, 0.12);
+}
+
+.n8n-sf-side-panel.theme-dark .n8n-sf-sp-close:hover {
+  background: rgba(139, 146, 165, 0.2);
+}
+
+.n8n-sf-sp-body {
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.n8n-sf-sp-description {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.n8n-sf-sp-map {
+  height: 220px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  cursor: grab;
+  -webkit-overflow-scrolling: touch;
+}
+
+.n8n-sf-sp-map:active {
+  cursor: grabbing;
+}
+
+.n8n-sf-sp-map.n8n-sf-sp-map-grabbing {
+  cursor: grabbing;
+}
+
+.n8n-sf-sp-map .n8n-sf-map-wrap {
+  flex-shrink: 0;
+}
+
+.n8n-sf-sp-subtitle {
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
+.n8n-sf-sp-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.n8n-sf-sp-list li {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.n8n-sf-sp-list li span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.n8n-sf-sp-open-btn {
+  display: inline-block;
+  text-decoration: none;
+  color: #fff;
+  background: #ff6d5a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: opacity 120ms ease;
+}
+
+.n8n-sf-sp-open-btn:hover {
+  opacity: 0.92;
+}
+
+/* ---- Breadcrumb bar (Chunk 3) ---- */
+.n8n-sf-breadcrumb {
+  position: fixed;
+  top: 56px;
+  left: 12px;
+  right: 12px;
+  z-index: 99997;
+  border-radius: 8px;
+  border: 1px solid #343949;
+  background: rgba(29, 31, 38, 0.94);
+  color: #e7eaf3;
+  padding: 7px 10px;
+  font-size: 12px;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  backdrop-filter: blur(2px);
+}
+
+.n8n-sf-breadcrumb.visible {
+  display: flex;
+}
+
+.n8n-sf-breadcrumb .home {
+  opacity: 0.9;
+}
+
+.n8n-sf-breadcrumb .sep {
+  opacity: 0.5;
+  margin: 0 2px;
+}
+
+.n8n-sf-breadcrumb a {
+  color: #ffb4aa;
+  text-decoration: none;
+}
+
+.n8n-sf-breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.n8n-sf-breadcrumb .current {
+  color: #fff;
+  font-weight: 600;
+}
