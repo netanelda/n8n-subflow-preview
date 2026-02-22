@@ -427,6 +427,18 @@
   pointer-events: none;
 }
 
+.n8n-sf-html-icon.has-image {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+}
+
+.n8n-sf-html-icon.has-image .n8n-sf-html-icon-img {
+  width: 24px;
+  height: 24px;
+}
+
 
 .n8n-sf-html-icon.kind-trigger { background: #34a853; }
 .n8n-sf-html-icon.kind-action  { background: #1a73e8; }

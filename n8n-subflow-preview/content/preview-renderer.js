@@ -180,8 +180,11 @@ const PreviewRenderer = (() => {
       // Centered icon inside the card — use real n8n icon if available, else emoji glyph
       const icon = document.createElement('div');
       const safeIconUrl = sanitizeIconUrl(node._iconUrl);
+      const hasFaIcon = Boolean(node._iconFa);
       const iconClass = colorClass;
-      icon.className = `n8n-sf-html-icon ${iconClass}`;
+      icon.className = (safeIconUrl && !hasFaIcon)
+        ? 'n8n-sf-html-icon has-image'
+        : `n8n-sf-html-icon ${iconClass}`;
 
       if (safeIconUrl) {
         const img = document.createElement('img');

@@ -565,20 +565,36 @@
       candidates.push(url);
     }
 
+    function lowerFirst(value) {
+      var text = String(value || '');
+      if (!text) return text;
+      return text.charAt(0).toLowerCase() + text.slice(1);
+    }
+
+    function pushFolderCandidates(folder) {
+      if (!folder) return;
+      push(base + folder + '/' + fileBaseName);
+      var lowerFirstFileName = lowerFirst(fileBaseName);
+      if (lowerFirstFileName && lowerFirstFileName !== fileBaseName) {
+        push(base + folder + '/' + lowerFirstFileName);
+      }
+    }
+
     // First try direct value from "file:" field.
     push(base + normalizedFileName);
 
     // Common n8n pattern: /nodes/FolderName/file.svg (e.g. /nodes/Code/code.svg).
     if (normalizedFileName.indexOf('/') === -1 && nodeType && nodeType.displayName) {
       var folderFromDisplay = toPascalCase(nodeType.displayName);
-      if (folderFromDisplay) push(base + folderFromDisplay + '/' + fileBaseName);
+      pushFolderCandidates(folderFromDisplay);
     }
 
     // Fallback folder derived from type suffix.
     var typeSuffix = String(nodeTypeName || '').split('.').slice(1).join('.');
     if (typeSuffix) {
       var folderFromType = toPascalCase(typeSuffix);
-      if (folderFromType) push(base + folderFromType + '/' + fileBaseName);
+      pushFolderCandidates(folderFromType);
+      pushFolderCandidates(typeSuffix.toLowerCase());
     }
 
     return candidates;
@@ -806,7 +822,16 @@
           var use = svg.querySelector('use');
           if (use) {
             var href = use.getAttribute('href') || use.getAttribute('xlink:href');
-            if (href) { iconMap[typeAttr] = href; return; }
+            if (href) {
+              if (href.indexOf('http://') === 0 || href.indexOf('https://') === 0) {
+                iconMap[typeAttr] = href;
+                return;
+              }
+              if (href.charAt(0) === '/') {
+                iconMap[typeAttr] = window.location.origin + href;
+                return;
+              }
+            }
           }
         }
       });
@@ -958,7 +983,12 @@
       var type = nodes[j].type;
       if (!type) continue;
 
+      // Reset icon fields before applying current best sources.
+      nodes[j]._iconUrl = null;
+      nodes[j]._iconFa = null;
+
       var url = maps.urls[type] || null;
+      var domUrl = domIcons[type] || null;
       var registryFa = maps.fa[type] || null;
       var registryColor = maps.colors[type] || null;
       if (registryColor) nodes[j]._iconColor = registryColor;
@@ -969,18 +999,19 @@
       });
       if (url) {
         nodes[j]._iconUrl = url;
+        nodes[j]._iconFa = null;
         svgCount++;
         registryResolved++;
         console.log(LOG, '[icon-debug] resolved from registry URL:', type, '->', url, '| success');
         continue;
       }
 
-      var faName = registryFa;
-      if (faName) {
-        nodes[j]._iconFa = faName;
-        faCount++;
-        registryResolved++;
-        console.log(LOG, '[icon-debug] resolved from registry FA:', type, '->', faName, '| success (CDN step in content script)');
+      if (domUrl) {
+        nodes[j]._iconUrl = domUrl;
+        nodes[j]._iconFa = null;
+        svgCount++;
+        fallbackResolved++;
+        console.log(LOG, '[icon-debug] resolved from DOM scrape:', type, '->', domUrl, '| success');
         continue;
       }
 
@@ -991,28 +1022,23 @@
       }
       if (resolved && resolved.url) {
         nodes[j]._iconUrl = resolved.url;
+        nodes[j]._iconFa = null;
         svgCount++;
         fallbackResolved++;
         console.log(LOG, '[icon-debug] resolved from fallback URL:', type, '->', resolved.url, '| success');
         continue;
       }
-      if (resolved && resolved.fa) {
-        nodes[j]._iconFa = resolved.fa;
+
+      var faName = registryFa || (resolved && resolved.fa) || null;
+      if (faName) {
+        nodes[j]._iconFa = faName;
         faCount++;
-        fallbackResolved++;
-        console.log(LOG, '[icon-debug] resolved from fallback FA:', type, '->', resolved.fa, '| success (CDN step in content script)');
+        if (registryFa) registryResolved++;
+        else fallbackResolved++;
+        console.log(LOG, '[icon-debug] resolved from FA fallback:', type, '->', faName, '| success (CDN step in content script)');
         continue;
       }
-
-      var domUrl = domIcons[type] || null;
-      if (domUrl) {
-        nodes[j]._iconUrl = domUrl;
-        svgCount++;
-        fallbackResolved++;
-        console.log(LOG, '[icon-debug] resolved from DOM scrape:', type, '->', domUrl, '| success');
-      } else {
-        console.log(LOG, '[icon-debug] no icon resolved for', type, '| will fall back to emoji glyph');
-      }
+      console.log(LOG, '[icon-debug] no icon resolved for', type, '| will fall back to emoji glyph');
     }
 
     console.log(

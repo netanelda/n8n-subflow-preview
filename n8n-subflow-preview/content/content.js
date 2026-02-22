@@ -241,15 +241,8 @@
   }
 
   function initializeBreadcrumbContext() {
-    const params = new URLSearchParams(window.location.search);
-    breadcrumbsEnabled = params.get('sfbc') === '1';
-    if (!breadcrumbsEnabled) {
-      breadcrumbTrail = [];
-      return;
-    }
-
-    const trailFromUrl = parseBreadcrumbTrailParam(params.get('sftrail'));
-    breadcrumbTrail = trailFromUrl.length > 0 ? trailFromUrl : loadBreadcrumbTrail();
+    breadcrumbsEnabled = false;
+    breadcrumbTrail = [];
   }
 
   function isValidWorkflowId(id) {
@@ -277,10 +270,12 @@
   function buildSubflowOpenUrl(subWorkflowId) {
     if (!isValidWorkflowId(subWorkflowId)) return '';
     const url = new URL(`${window.location.origin}/workflow/${encodeURIComponent(subWorkflowId)}`);
-    url.searchParams.set('sfbc', '1');
-    const trail = getOutboundBreadcrumbTrail();
-    if (trail.length > 0) {
-      url.searchParams.set('sftrail', trail.join(','));
+    if (breadcrumbsEnabled) {
+      url.searchParams.set('sfbc', '1');
+      const trail = getOutboundBreadcrumbTrail();
+      if (trail.length > 0) {
+        url.searchParams.set('sftrail', trail.join(','));
+      }
     }
     return url.toString();
   }
