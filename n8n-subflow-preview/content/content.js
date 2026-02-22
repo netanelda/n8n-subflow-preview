@@ -38,6 +38,14 @@
   // CDN-based Font Awesome SVG resolver (content script can fetch freely)
   const FA_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/svgs';
   const FA_STYLE_ORDER = ['solid', 'regular', 'brands'];
+  const CATEGORY_ICON_COLORS = {
+    trigger: '#34a853',
+    action: '#1a73e8',
+    logic: '#f29900',
+    ai: '#7b61ff',
+    data: '#0f9d58',
+    http: '#e8710a'
+  };
   // n8n still emits some FA5 names; map them to FA6 file names.
   const FA5_TO_FA6_ALIASES = {
     'sign-in-alt': 'right-to-bracket',
@@ -57,9 +65,182 @@
   };
   // Cache value is data URL (string) or null for negative lookups.
   const faIconCache = Object.create(null);
+  const svgTintCache = Object.create(null);
 
-  async function resolveSingleFaIcon(name) {
-    if (Object.prototype.hasOwnProperty.call(faIconCache, name)) return;
+  function getNodeColorClass(type) {
+    const t = String(type || '').toLowerCase();
+    if (t.includes('trigger') || t.includes('webhook') || t.endsWith('.start')) return 'trigger';
+    if (t.includes('if') || t.includes('switch') || t.includes('filter') || t.includes('code') || t.includes('function')) return 'logic';
+    if (t.includes('ai') || t.includes('langchain') || t.includes('agent') || t.includes('gemini') || t.includes('openai') || t.includes('chatmodel')) return 'ai';
+    if (t.includes('google') || t.includes('sheet') || t.includes('database') || t.includes('postgres') || t.includes('mysql') || t.includes('mongo')) return 'data';
+    if (t.includes('http') || t.includes('request')) return 'http';
+    return 'action';
+  }
+
+  function getNodeIconColor(type) {
+    return CATEGORY_ICON_COLORS[getNodeColorClass(type)] || CATEGORY_ICON_COLORS.action;
+  }
+
+  function decodeSvgDataUrl(url) {
+    const match = String(url || '').match(/^data:image\/svg\+xml(?:;charset=[^;,]+)?(?:;(base64))?,(.*)$/i);
+    if (!match) return null;
+    const isBase64 = Boolean(match[1]);
+    const payload = match[2] || '';
+    try {
+      return isBase64 ? atob(payload) : decodeURIComponent(payload);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function encodeSvgDataUrl(svgText) {
+    return `data:image/svg+xml,${encodeURIComponent(svgText)}`;
+  }
+
+  function parseRgbChannel(raw) {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+    if (value.endsWith('%')) {
+      const pct = Number(value.slice(0, -1));
+      if (!Number.isFinite(pct)) return null;
+      return Math.max(0, Math.min(255, Math.round((pct / 100) * 255)));
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    return Math.max(0, Math.min(255, Math.round(num)));
+  }
+
+  function isNeutralColorToken(rawToken) {
+    const token = String(rawToken || '').trim();
+    if (!token) return false;
+    const clean = token.replace(/\s*!important\s*$/i, '');
+    const lower = clean.toLowerCase();
+
+    if (lower === 'none' || lower === 'transparent') return false;
+    if (lower.indexOf('url(') !== -1) return false;
+    if (lower === 'currentcolor') return true;
+    if (lower === 'white' || lower === 'black' || lower === 'gray' || lower === 'grey' || lower === 'silver') return true;
+
+    const hexMatch = lower.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+    if (hexMatch) {
+      const rawHex = hexMatch[1].toLowerCase();
+      const hex = (rawHex.length === 3 || rawHex.length === 4)
+        ? (rawHex[0] + rawHex[0] + rawHex[1] + rawHex[1] + rawHex[2] + rawHex[2])
+        : rawHex.slice(0, 6);
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return Number.isFinite(r) && r === g && g === b;
+    }
+
+    const rgbMatch = lower.match(/^rgba?\(([^)]+)\)$/);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(',');
+      if (parts.length < 3) return false;
+      const r2 = parseRgbChannel(parts[0]);
+      const g2 = parseRgbChannel(parts[1]);
+      const b2 = parseRgbChannel(parts[2]);
+      if (r2 === null || g2 === null || b2 === null) return false;
+      return r2 === g2 && g2 === b2;
+    }
+
+    return false;
+  }
+
+  function hasExplicitPaintInstructions(svgText) {
+    return /(fill|stroke)\s*=/i.test(svgText) || /(?:^|;)\s*(fill|stroke)\s*:/i.test(svgText);
+  }
+
+  function withRootPaintFallback(svgText, color) {
+    let changed = false;
+    const output = String(svgText || '').replace(/<svg\b([^>]*)>/i, (match, attrs) => {
+      if (/\sfill\s*=/.test(attrs) || /\sstroke\s*=/.test(attrs)) return match;
+      changed = true;
+      return `<svg${attrs} fill="${color}" stroke="${color}">`;
+    });
+    return { svg: output, changed };
+  }
+
+  function replaceNeutralPaintTokens(svgText, color) {
+    let changed = false;
+    let output = String(svgText || '').replace(
+      /(fill|stroke)\s*=\s*(['"])([^'"]+)\2/gi,
+      (match, prop, quote, value) => {
+        if (!isNeutralColorToken(value)) return match;
+        changed = true;
+        return `${prop}=${quote}${color}${quote}`;
+      }
+    );
+
+    output = output.replace(/style\s*=\s*(['"])([^'"]*)\1/gi, (match, quote, styleValue) => {
+      let styleChanged = false;
+      const nextStyle = String(styleValue || '').replace(
+        /(^|;)\s*(fill|stroke)\s*:\s*([^;]+)/gi,
+        (declaration, prefix, prop, value) => {
+          if (!isNeutralColorToken(value)) return declaration;
+          styleChanged = true;
+          const lead = prefix || '';
+          return `${lead}${lead ? ' ' : ''}${prop}: ${color}`;
+        }
+      );
+      if (!styleChanged) return match;
+      changed = true;
+      return `style=${quote}${nextStyle}${quote}`;
+    });
+
+    return { svg: output, changed };
+  }
+
+  function hasBrandSpecificFill(svgText) {
+    const source = String(svgText || '');
+    if (!source) return false;
+    if (/(fill|stroke)\s*=\s*['"]\s*url\(/i.test(source)) return true;
+    if (/(^|;)\s*(fill|stroke)\s*:\s*url\(/i.test(source)) return true;
+
+    const paintValues = [];
+    source.replace(/(fill|stroke)\s*=\s*['"]([^'"]+)['"]/gi, (_m, _prop, value) => {
+      paintValues.push(value);
+      return _m;
+    });
+    source.replace(/style\s*=\s*['"]([^'"]*)['"]/gi, (_m, styleValue) => {
+      String(styleValue || '').replace(/(^|;)\s*(fill|stroke)\s*:\s*([^;]+)/gi, (_d, _pfx, _prop, value) => {
+        paintValues.push(value);
+        return _d;
+      });
+      return _m;
+    });
+
+    for (const rawValue of paintValues) {
+      const value = String(rawValue || '').trim().replace(/\s*!important\s*$/i, '');
+      if (!value) continue;
+      const lower = value.toLowerCase();
+      if (lower === 'none' || lower === 'transparent' || lower === 'currentcolor') continue;
+      if (!isNeutralColorToken(value)) return true;
+    }
+    return false;
+  }
+
+  function tintMonochromeSvg(svgText, color) {
+    if (!svgText || !color) return null;
+    if (hasBrandSpecificFill(svgText)) return null;
+
+    let output = String(svgText);
+    const replaced = replaceNeutralPaintTokens(output, color);
+    output = replaced.svg;
+    let changed = replaced.changed;
+
+    if (!changed && !hasExplicitPaintInstructions(output)) {
+      const fallback = withRootPaintFallback(output, color);
+      output = fallback.svg;
+      changed = fallback.changed;
+    }
+
+    return changed ? output : null;
+  }
+
+  async function resolveSingleFaIcon(name, color) {
+    const cacheKey = `${name}|${color}`;
+    if (Object.prototype.hasOwnProperty.call(faIconCache, cacheKey)) return;
 
     const alias = FA5_TO_FA6_ALIASES[name] || null;
     const candidateNames = alias && alias !== name ? [alias, name] : [name];
@@ -70,9 +251,14 @@
           const res = await fetch(`${FA_CDN_BASE}/${style}/${candidateName}.svg`);
           if (!res.ok) continue;
           let svg = await res.text();
-          // Replace fill="currentColor" with white so icons are visible on colored circles.
-          svg = svg.replace(/fill="currentColor"/g, 'fill="white"');
-          faIconCache[name] = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+          // Tint Font Awesome SVGs with the node category color.
+          const replaced = replaceNeutralPaintTokens(svg, color);
+          svg = replaced.svg;
+          if (!replaced.changed) {
+            const fallback = withRootPaintFallback(svg, color);
+            svg = fallback.svg;
+          }
+          faIconCache[cacheKey] = encodeSvgDataUrl(svg);
           return;
         } catch (_e) {
           // Keep trying the next candidate path.
@@ -81,7 +267,7 @@
     }
 
     // Negative caching prevents repeated 404 spam for unknown icons.
-    faIconCache[name] = null;
+    faIconCache[cacheKey] = null;
   }
 
   async function resolveFaIcons(nodes) {
@@ -91,26 +277,32 @@
     // Collect unique FA icon names that need fetching.
     const needed = {};
     for (const node of nodes) {
+      const iconColor = getNodeIconColor(node.type);
+      const cacheKey = `${node._iconFa}|${iconColor}`;
       if (
         node._iconFa &&
         !node._iconUrl &&
-        !Object.prototype.hasOwnProperty.call(faIconCache, node._iconFa)
+        !Object.prototype.hasOwnProperty.call(faIconCache, cacheKey)
       ) {
-        needed[node._iconFa] = true;
+        needed[cacheKey] = {
+          name: node._iconFa,
+          color: iconColor
+        };
       }
     }
 
     // Fetch all missing FA icons in parallel.
-    const names = Object.keys(needed);
-    if (names.length > 0) {
-      console.log(`${LOG_PREFIX} [icon-debug] FA CDN candidates:`, names.join(', '));
-      await Promise.all(names.map(resolveSingleFaIcon));
+    const entries = Object.values(needed);
+    if (entries.length > 0) {
+      console.log(`${LOG_PREFIX} [icon-debug] FA CDN candidates:`, entries.map((item) => item.name).join(', '));
+      await Promise.all(entries.map((item) => resolveSingleFaIcon(item.name, item.color)));
     }
 
     // Apply cached data URLs to nodes.
     for (const node of nodes) {
       if (node._iconFa && !node._iconUrl) {
-        const dataUrl = faIconCache[node._iconFa];
+        const iconColor = getNodeIconColor(node.type);
+        const dataUrl = faIconCache[`${node._iconFa}|${iconColor}`];
         if (dataUrl) node._iconUrl = dataUrl;
       }
     }
@@ -129,6 +321,57 @@
     console.log(
       `${LOG_PREFIX} [icon-debug] final tally | registry/url: ${resolvedFromRegistryOrUrl} | FA CDN: ${resolvedFromFaCdn} | emoji fallback: ${emojiFallback}`
     );
+  }
+
+  async function tintMonochromeSvgIcons(nodes) {
+    if (!Array.isArray(nodes)) return;
+
+    for (const node of nodes) {
+      const iconUrl = String(node && node._iconUrl ? node._iconUrl : '');
+      if (!iconUrl || node._iconFa) continue;
+      const iconColor = getNodeIconColor(node.type);
+      const cacheKey = `${iconUrl}|${iconColor}`;
+      if (Object.prototype.hasOwnProperty.call(svgTintCache, cacheKey)) {
+        if (svgTintCache[cacheKey]) node._iconUrl = svgTintCache[cacheKey];
+        continue;
+      }
+
+      let svgText = null;
+      if (/^data:image\/svg\+xml/i.test(iconUrl)) {
+        svgText = decodeSvgDataUrl(iconUrl);
+      } else if (/\.svg(?:$|\?)/i.test(iconUrl)) {
+        try {
+          const res = await fetch(iconUrl, { credentials: 'include' });
+          if (!res.ok) {
+            svgTintCache[cacheKey] = null;
+            continue;
+          }
+          const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+          if (contentType && !contentType.includes('svg')) {
+            svgTintCache[cacheKey] = null;
+            continue;
+          }
+          svgText = await res.text();
+        } catch (_err) {
+          svgTintCache[cacheKey] = null;
+          continue;
+        }
+      }
+
+      if (!svgText) {
+        svgTintCache[cacheKey] = null;
+        continue;
+      }
+
+      const tinted = tintMonochromeSvg(svgText, iconColor);
+      if (tinted) {
+        const tintedDataUrl = encodeSvgDataUrl(tinted);
+        node._iconUrl = tintedDataUrl;
+        svgTintCache[cacheKey] = tintedDataUrl;
+      } else {
+        svgTintCache[cacheKey] = null;
+      }
+    }
   }
 
   const pendingSubflowFetches = new Map();
@@ -742,6 +985,8 @@
     // Resolve Font Awesome icons via CDN before rendering
     if (Array.isArray(workflowData.nodes)) {
       await resolveFaIcons(workflowData.nodes);
+      // Tint only monochrome SVG icons; keep native multicolor brand icons unchanged.
+      await tintMonochromeSvgIcons(workflowData.nodes);
     }
 
     hoverState.cachedWorkflowData = workflowData;

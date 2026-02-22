@@ -409,46 +409,33 @@
 .n8n-sf-html-icon {
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 16px;
   line-height: 1;
-  color: #fff;
+  color: #1a73e8;
+  background: transparent;
   overflow: hidden;
 }
 
 /* Real n8n node icon image (replaces emoji glyph when available) */
 .n8n-sf-html-icon-img {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
   pointer-events: none;
 }
 
-.n8n-sf-html-icon.has-image {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  color: inherit;
-}
-
-.n8n-sf-html-icon.has-image .n8n-sf-html-icon-img {
-  width: 24px;
-  height: 24px;
-}
-
-
-.n8n-sf-html-icon.kind-trigger { background: #34a853; }
-.n8n-sf-html-icon.kind-action  { background: #1a73e8; }
-.n8n-sf-html-icon.kind-logic   { background: #f29900; }
-.n8n-sf-html-icon.kind-ai      { background: #7b61ff; }
-.n8n-sf-html-icon.kind-data    { background: #0f9d58; }
-.n8n-sf-html-icon.kind-http    { background: #e8710a; }
+.n8n-sf-html-icon.kind-trigger { color: #34a853; }
+.n8n-sf-html-icon.kind-action  { color: #1a73e8; }
+.n8n-sf-html-icon.kind-logic   { color: #f29900; }
+.n8n-sf-html-icon.kind-ai      { color: #7b61ff; }
+.n8n-sf-html-icon.kind-data    { color: #0f9d58; }
+.n8n-sf-html-icon.kind-http    { color: #e8710a; }
 .n8n-sf-html-icon.kind-native  {
-  background: #f2f4f7;
-  border: 1px solid #d0d5dd;
+  color: #98a2b3;
 }
 
 /* Name label below the card */
@@ -499,8 +486,7 @@
 }
 
 .n8n-sf-map-wrap.theme-dark .n8n-sf-html-icon.kind-native {
-  background: #2a3040;
-  border-color: #4b5568;
+  color: #a9b1c4;
 }
 
 /* ---- Side panel (Chunk 3) ---- */
