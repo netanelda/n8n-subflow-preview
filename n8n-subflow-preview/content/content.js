@@ -41,7 +41,19 @@
   // n8n still emits some FA5 names; map them to FA6 file names.
   const FA5_TO_FA6_ALIASES = {
     'sign-in-alt': 'right-to-bracket',
-    'sign-out-alt': 'right-from-bracket'
+    'sign-out-alt': 'right-from-bracket',
+    sync: 'arrows-rotate',
+    'exchange-alt': 'right-left',
+    random: 'shuffle',
+    redo: 'rotate-right',
+    cog: 'gear',
+    cogs: 'gears',
+    edit: 'pen-to-square',
+    'trash-alt': 'trash-can',
+    'file-alt': 'file-lines',
+    envelope: 'envelope',
+    'code-branch': 'code-branch',
+    'clipboard-list': 'clipboard-list'
   };
   // Cache value is data URL (string) or null for negative lookups.
   const faIconCache = Object.create(null);
@@ -74,6 +86,7 @@
 
   async function resolveFaIcons(nodes) {
     if (!Array.isArray(nodes)) return;
+    console.log(`${LOG_PREFIX} [icon-debug] resolveFaIcons start:`, nodes.length, 'nodes');
 
     // Collect unique FA icon names that need fetching.
     const needed = {};
@@ -90,6 +103,7 @@
     // Fetch all missing FA icons in parallel.
     const names = Object.keys(needed);
     if (names.length > 0) {
+      console.log(`${LOG_PREFIX} [icon-debug] FA CDN candidates:`, names.join(', '));
       await Promise.all(names.map(resolveSingleFaIcon));
     }
 
@@ -100,6 +114,21 @@
         if (dataUrl) node._iconUrl = dataUrl;
       }
     }
+
+    let resolvedFromRegistryOrUrl = 0;
+    let resolvedFromFaCdn = 0;
+    let emojiFallback = 0;
+    for (const node of nodes) {
+      if (node._iconUrl) {
+        if (node._iconFa) resolvedFromFaCdn++;
+        else resolvedFromRegistryOrUrl++;
+      } else {
+        emojiFallback++;
+      }
+    }
+    console.log(
+      `${LOG_PREFIX} [icon-debug] final tally | registry/url: ${resolvedFromRegistryOrUrl} | FA CDN: ${resolvedFromFaCdn} | emoji fallback: ${emojiFallback}`
+    );
   }
 
   const pendingSubflowFetches = new Map();

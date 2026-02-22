@@ -260,11 +260,14 @@
       console.log(LOG, 'SUCCESS via ' + result.source + ' — ' + result.data.nodes.length + ' nodes');
       didSucceed = true;
       if (probeTimer) clearTimeout(probeTimer);
-      await enrichNodesWithIcons(result.data.nodes);
+      await enrichNodesWithIcons(result.data.nodes, true);
+      var probeIconMaps = await getGlobalIconMaps(false);
+      _persistedProbeIconLookup = cloneIconLookupForMessage(probeIconMaps);
       window.postMessage({
         type: 'n8n-subflow-probe-result',
         payload: result.data,
-        source: result.source
+        source: result.source,
+        iconLookup: cloneIconLookupForMessage(probeIconMaps)
       }, '*');
       isProbing = false;
     } else if (attempts < maxAttempts) {
@@ -392,11 +395,19 @@
     return appEl.__vue_app__;
   }
 
-  function getStoreInstance(storeId) {
+  function getPiniaInstance() {
     try {
       var app = getVueApp();
-      if (!app) return null;
-      var pinia = app.config.globalProperties.$pinia;
+      if (!app || !app.config || !app.config.globalProperties) return null;
+      return app.config.globalProperties.$pinia || null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function getStoreInstance(storeId) {
+    try {
+      var pinia = getPiniaInstance();
       if (!pinia || !pinia._s || typeof pinia._s.get !== 'function') return null;
       return pinia._s.get(storeId) || null;
     } catch (_err) {
@@ -404,9 +415,93 @@
     }
   }
 
+  function looksLikeNodeTypesStore(store) {
+    if (!store || typeof store !== 'object') return false;
+    if (typeof store.getNodeType === 'function') return true;
+    if (store.allLatestNodeTypes || store.allNodeTypes) return true;
+    if (store.nodeTypes || store.types || store.byName) return true;
+    return false;
+  }
+
+  var _nodeTypesSourceLogCache = Object.create(null);
+
+  function getNodeTypesStoreCandidates() {
+    var pinia = getPiniaInstance();
+    var out = [];
+    var seen = Object.create(null);
+    if (!pinia) return out;
+
+    function push(label, store) {
+      if (!store || typeof store !== 'object') return;
+      if (!looksLikeNodeTypesStore(store)) return;
+      var key = label + '::' + Object.prototype.toString.call(store);
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({ label: label, store: store });
+      if (!_nodeTypesSourceLogCache[label]) {
+        _nodeTypesSourceLogCache[label] = true;
+        try {
+          var keys = Object.keys(store);
+          console.log(LOG, 'nodeTypes source keys [' + label + ']:', keys.slice(0, 40).join(', '));
+        } catch (_err) {
+          console.log(LOG, 'nodeTypes source keys [' + label + ']: <unavailable>');
+        }
+      }
+    }
+
+    // Preferred: real pinia store instance by id.
+    push('pinia._s.nodeTypes', getStoreInstance('nodeTypes'));
+
+    // Iterate all store instances to catch renamed ids.
+    try {
+      if (pinia._s && typeof pinia._s.forEach === 'function') {
+        pinia._s.forEach(function (store, id) {
+          push('pinia._s.' + id, store);
+        });
+      }
+    } catch (_err) {
+      // ignore
+    }
+
+    // Check reactive state snapshots used by some n8n versions.
+    try {
+      var state = pinia.state && pinia.state.value ? pinia.state.value : null;
+      if (state && typeof state === 'object') {
+        push('pinia.state.value.nodeTypes', state.nodeTypes);
+        push('pinia.state.value.ndv', state.ndv);
+        Object.keys(state).forEach(function (k) {
+          push('pinia.state.value.' + k, state[k]);
+        });
+      }
+    } catch (_err) {
+      // ignore
+    }
+
+    return out;
+  }
+
+  function getNodeTypeEntries(store) {
+    if (!store || typeof store !== 'object') return [];
+    var candidates = [
+      store.allLatestNodeTypes,
+      store.allNodeTypes,
+      store.nodeTypes,
+      store.types,
+      store.byName
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var value = candidates[i];
+      if (!value) continue;
+      if (Array.isArray(value)) return value;
+      if (typeof value === 'object') return Object.values(value);
+    }
+    return [];
+  }
+
   // ---- Resolve real n8n node icon URLs from the nodeTypes store ----
   function getNodeTypesStore() {
-    return getStoreInstance('nodeTypes');
+    var candidates = getNodeTypesStoreCandidates();
+    return candidates.length > 0 ? candidates[0].store : null;
   }
 
   function ensureLeadingSlash(path) {
@@ -489,6 +584,51 @@
     return candidates;
   }
 
+  var _typesNodesJsonPromise = null;
+
+  async function loadTypesNodesJson() {
+    if (_typesNodesJsonPromise) return _typesNodesJsonPromise;
+    _typesNodesJsonPromise = (async function () {
+      try {
+        var res = await _originalFetch(window.location.origin + '/types/nodes.json', {
+          method: 'GET',
+          credentials: 'include'
+        });
+        if (!res || !res.ok) return null;
+        var json = await res.json();
+        return json || null;
+      } catch (_err) {
+        return null;
+      }
+    })();
+    return _typesNodesJsonPromise;
+  }
+
+  function getTypesNodesEntry(raw, nodeTypeName) {
+    if (!raw || !nodeTypeName) return null;
+    try {
+      if (Array.isArray(raw)) {
+        for (var i = 0; i < raw.length; i++) {
+          var item = raw[i];
+          if (item && item.name === nodeTypeName) return item;
+        }
+      }
+      if (raw.data && Array.isArray(raw.data)) {
+        for (var j = 0; j < raw.data.length; j++) {
+          var item2 = raw.data[j];
+          if (item2 && item2.name === nodeTypeName) return item2;
+        }
+      }
+      if (raw.nodeTypes && typeof raw.nodeTypes === 'object') {
+        if (raw.nodeTypes[nodeTypeName]) return raw.nodeTypes[nodeTypeName];
+      }
+      if (typeof raw === 'object' && raw[nodeTypeName]) return raw[nodeTypeName];
+    } catch (_err) {
+      // ignore
+    }
+    return null;
+  }
+
   async function canFetchIcon(url) {
     if (Object.prototype.hasOwnProperty.call(_iconProbeCache, url)) return _iconProbeCache[url];
 
@@ -531,51 +671,117 @@
     return null;
   }
 
-  async function resolveIconUrlForType(nodeTypeName) {
-    try {
-      var ntStore = getNodeTypesStore();
-      if (!ntStore) return null;
+  function normalizeNodeColor(raw) {
+    if (!raw) return null;
+    var value = String(raw).trim();
+    if (!value) return null;
+    if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value;
+    if (/^[0-9a-fA-F]{3,8}$/.test(value)) return '#' + value;
+    return null;
+  }
 
-      var nodeType = null;
-      var resolvedTypeName = nodeTypeName;
-      if (typeof ntStore.getNodeType === 'function') {
-        var lookupNames = getNodeTypeLookupCandidates(nodeTypeName);
-        for (var i = 0; i < lookupNames.length && !nodeType; i++) {
-          nodeType = ntStore.getNodeType(lookupNames[i]);
-          if (!nodeType) nodeType = ntStore.getNodeType(lookupNames[i], 1);
-          if (nodeType) resolvedTypeName = lookupNames[i];
-        }
+  function extractNodeTypeColor(nodeType) {
+    if (!nodeType || typeof nodeType !== 'object') return null;
+    var raw = null;
+    if (nodeType.defaults && typeof nodeType.defaults === 'object') {
+      raw = nodeType.defaults.color || null;
+    }
+    if (!raw && nodeType.color) raw = nodeType.color;
+    return normalizeNodeColor(raw);
+  }
+
+  async function resolveIconFromEntry(nodeTypeName, nodeType) {
+    if (!nodeType || typeof nodeType !== 'object') return { url: null, fa: null, color: null };
+    var nodeColor = extractNodeTypeColor(nodeType);
+
+    // iconUrl: string path ready to use (e.g. "icons/n8n-nodes-base/dist/nodes/Form/form.svg")
+    if (nodeType.iconUrl) {
+      if (typeof nodeType.iconUrl === 'object') {
+        var objUrl = nodeType.iconUrl.light || nodeType.iconUrl.dark || null;
+        if (objUrl) return { url: window.location.origin + ensureLeadingSlash(objUrl), fa: null, color: nodeColor };
       }
-      if (!nodeType) return null;
-
-      // iconUrl: string path ready to use (e.g. "icons/n8n-nodes-base/dist/nodes/Form/form.svg")
-      if (nodeType.iconUrl) {
-        if (typeof nodeType.iconUrl === 'object') {
-          var url = nodeType.iconUrl.light || nodeType.iconUrl.dark || null;
-          if (url) return window.location.origin + ensureLeadingSlash(url);
-        }
-        if (typeof nodeType.iconUrl === 'string') {
-          return window.location.origin + ensureLeadingSlash(nodeType.iconUrl);
-        }
+      if (typeof nodeType.iconUrl === 'string') {
+        return { url: window.location.origin + ensureLeadingSlash(nodeType.iconUrl), fa: null, color: nodeColor };
       }
+    }
 
-      // icon: "file:filename.svg" → resolve to n8n's icon serving path
-      var iconField = nodeType.icon;
-      if (typeof iconField === 'string' && iconField.startsWith('file:')) {
+    // icon: "file:filename.svg" | "fa:robot"
+    var iconField = nodeType.icon;
+    if (typeof iconField === 'string') {
+      if (iconField.indexOf('fa:') === 0) {
+        return { url: null, fa: iconField.slice(3), color: nodeColor };
+      }
+      if (iconField.indexOf('file:') === 0) {
         var fileName = iconField.slice(5);
-        return await resolveFileIconUrl(resolvedTypeName, nodeType, fileName);
+        var fileUrl = await resolveFileIconUrl(nodeTypeName, nodeType, fileName);
+        return { url: fileUrl, fa: null, color: nodeColor };
       }
-      if (typeof iconField === 'object' && iconField) {
-        var lightIcon = (iconField.light || iconField.dark || '');
-        if (lightIcon.startsWith('file:')) {
-          var fn = lightIcon.slice(5);
-          return await resolveFileIconUrl(resolvedTypeName, nodeType, fn);
+      if (iconField.indexOf('/') >= 0 || iconField.indexOf('.svg') >= 0) {
+        return { url: window.location.origin + ensureLeadingSlash(iconField), fa: null, color: nodeColor };
+      }
+    }
+
+    if (typeof iconField === 'object' && iconField) {
+      var iconValue = iconField.light || iconField.dark || '';
+      if (typeof iconValue === 'string' && iconValue.indexOf('fa:') === 0) {
+        return { url: null, fa: iconValue.slice(3), color: nodeColor };
+      }
+      if (typeof iconValue === 'string' && iconValue.indexOf('file:') === 0) {
+        var fn = iconValue.slice(5);
+        var fileUrl2 = await resolveFileIconUrl(nodeTypeName, nodeType, fn);
+        return { url: fileUrl2, fa: null, color: nodeColor };
+      }
+    }
+
+    return { url: null, fa: null, color: nodeColor };
+  }
+
+  async function resolveIconDetailsForType(nodeTypeName) {
+    try {
+      var lookupNames = getNodeTypeLookupCandidates(nodeTypeName);
+      var stores = getNodeTypesStoreCandidates();
+
+      // 1) Prefer store getter lookup.
+      for (var s = 0; s < stores.length; s++) {
+        var store = stores[s].store;
+        if (typeof store.getNodeType !== 'function') continue;
+        for (var i = 0; i < lookupNames.length; i++) {
+          var candidateName = lookupNames[i];
+          var nodeType = store.getNodeType(candidateName) || store.getNodeType(candidateName, 1);
+          if (!nodeType) continue;
+          var resolved = await resolveIconFromEntry(candidateName, nodeType);
+          if (resolved.url || resolved.fa || resolved.color) return resolved;
         }
+      }
+
+      // 2) Fallback to enumerated arrays/maps in state/store objects.
+      for (var s2 = 0; s2 < stores.length; s2++) {
+        var entries = getNodeTypeEntries(stores[s2].store);
+        if (!entries || entries.length === 0) continue;
+        for (var j = 0; j < entries.length; j++) {
+          var entry = entries[j];
+          if (!entry || !entry.name) continue;
+          var matches = lookupNames.indexOf(entry.name) !== -1;
+          if (!matches) continue;
+          var resolved2 = await resolveIconFromEntry(entry.name, entry);
+          if (resolved2.url || resolved2.fa || resolved2.color) return resolved2;
+        }
+      }
+
+      // 3) Try /types/nodes.json registry if available.
+      var typesJson = await loadTypesNodesJson();
+      for (var k = 0; k < lookupNames.length; k++) {
+        var fromJson = getTypesNodesEntry(typesJson, lookupNames[k]);
+        if (!fromJson) continue;
+        var merged = fromJson;
+        if (!merged.name) merged = Object.assign({ name: lookupNames[k] }, fromJson);
+        var resolved3 = await resolveIconFromEntry(lookupNames[k], merged);
+        if (resolved3.url || resolved3.fa || resolved3.color) return resolved3;
       }
     } catch (_e) {
       // Best-effort — never break
     }
-    return null;
+    return { url: null, fa: null, color: null };
   }
 
   // Scrape icon URLs directly from n8n's rendered canvas DOM nodes
@@ -610,73 +816,220 @@
 
   // Build type→icon maps from allLatestNodeTypes.
   // Returns { urls: { type: url }, fa: { type: faIconName } }
-  function buildIconMaps() {
+  async function buildIconMaps() {
     var urls = {};
     var fa = {};
+    var colors = {};
+    var registryEntries = 0;
+    var loggedStoreSamples = false;
     try {
-      var ntStore = getNodeTypesStore();
-      if (!ntStore) return { urls: urls, fa: fa };
+      var stores = getNodeTypesStoreCandidates();
+      var seenNames = Object.create(null);
 
-      var allTypes = ntStore.allLatestNodeTypes || ntStore.allNodeTypes || [];
-      var entries = Array.isArray(allTypes) ? allTypes : Object.values(allTypes);
-
-      for (var i = 0; i < entries.length; i++) {
-        var entry = entries[i];
-        if (!entry || !entry.name) continue;
-
-        if (entry.iconUrl) {
-          var raw = typeof entry.iconUrl === 'object'
-            ? (entry.iconUrl.light || entry.iconUrl.dark)
-            : entry.iconUrl;
-          if (raw) { urls[entry.name] = window.location.origin + ensureLeadingSlash(raw); continue; }
+      for (var s = 0; s < stores.length; s++) {
+        var entries = getNodeTypeEntries(stores[s].store);
+        if (!loggedStoreSamples && entries && entries.length > 0) {
+          loggedStoreSamples = true;
+          console.log(LOG, 'nodeTypes sample source:', stores[s].label, '| total entries:', entries.length);
+          for (var sampleIdx = 0; sampleIdx < Math.min(3, entries.length); sampleIdx++) {
+            var sample = entries[sampleIdx];
+            var sampleKeys = sample && typeof sample === 'object' ? Object.keys(sample) : [];
+            console.log(LOG, 'nodeTypes sample[' + sampleIdx + '] keys:', sampleKeys.join(', '));
+            console.log(LOG, 'nodeTypes sample[' + sampleIdx + '] value:', sample);
+          }
         }
-
-        var iconField = entry.icon;
-        if (typeof iconField === 'string' && iconField.startsWith('fa:')) {
-          fa[entry.name] = iconField.slice(3);
-          continue;
+        for (var i = 0; i < entries.length; i++) {
+          var entry = entries[i];
+          if (!entry || !entry.name || seenNames[entry.name]) continue;
+          seenNames[entry.name] = true;
+          registryEntries++;
+          var resolved = await resolveIconFromEntry(entry.name, entry);
+          if (resolved.url) urls[entry.name] = resolved.url;
+          if (resolved.fa) fa[entry.name] = resolved.fa;
+          if (resolved.color) colors[entry.name] = resolved.color;
         }
       }
-      console.log(LOG, 'Icon maps built:', Object.keys(urls).length, 'SVG +', Object.keys(fa).length, 'FA');
+
+      // Merge /types/nodes.json registry as additional source.
+      var typesJson = await loadTypesNodesJson();
+      var lookup = Object.create(null);
+      if (typesJson) {
+        var items = [];
+        if (Array.isArray(typesJson)) items = typesJson;
+        else if (typesJson.data && Array.isArray(typesJson.data)) items = typesJson.data;
+        else if (typesJson.nodeTypes && typeof typesJson.nodeTypes === 'object') {
+          items = Object.keys(typesJson.nodeTypes).map(function (name) {
+            var item = typesJson.nodeTypes[name];
+            if (!item || typeof item !== 'object') return null;
+            return item.name ? item : Object.assign({ name: name }, item);
+          }).filter(Boolean);
+        } else if (typeof typesJson === 'object') {
+          items = Object.keys(typesJson).map(function (name) {
+            var item = typesJson[name];
+            if (!item || typeof item !== 'object') return null;
+            return item.name ? item : Object.assign({ name: name }, item);
+          }).filter(Boolean);
+        }
+
+        for (var j = 0; j < items.length; j++) {
+          var item = items[j];
+          if (!item || !item.name || lookup[item.name]) continue;
+          lookup[item.name] = true;
+          if (!urls[item.name] && !fa[item.name]) {
+            var resolvedJson = await resolveIconFromEntry(item.name, item);
+            if (resolvedJson.url) urls[item.name] = resolvedJson.url;
+            if (resolvedJson.fa) fa[item.name] = resolvedJson.fa;
+            if (resolvedJson.color) colors[item.name] = resolvedJson.color;
+          } else if (!colors[item.name]) {
+            var colorOnly = extractNodeTypeColor(item);
+            if (colorOnly) colors[item.name] = colorOnly;
+          }
+        }
+      }
+
+      console.log(
+        LOG,
+        'Icon maps built from registry:',
+        registryEntries,
+        'entries ->',
+        Object.keys(urls).length,
+        'SVG +',
+        Object.keys(fa).length,
+        'FA,',
+        Object.keys(colors).length,
+        'colors'
+      );
     } catch (_e) {
       console.warn(LOG, 'buildIconMaps error:', _e);
     }
-    return { urls: urls, fa: fa };
+    return { urls: urls, fa: fa, colors: colors, registryEntries: registryEntries };
   }
 
   var _globalIconMaps = null;
   var _iconMapsBuiltAt = 0;
+  var _persistedProbeIconLookup = { urls: {}, fa: {}, colors: {} };
 
-  function getGlobalIconMaps(forceRefresh) {
+  async function getGlobalIconMaps(forceRefresh) {
     var now = Date.now();
     // Rebuild maps if forced or if more than 10s have passed (node types may have loaded lazily)
     if (!_globalIconMaps || forceRefresh || (now - _iconMapsBuiltAt > 10000)) {
-      _globalIconMaps = buildIconMaps();
+      _globalIconMaps = await buildIconMaps();
       _iconMapsBuiltAt = now;
     }
     return _globalIconMaps;
   }
 
+  function cloneIconLookupForMessage(maps) {
+    var out = { urls: {}, fa: {}, colors: {} };
+    if (!maps || typeof maps !== 'object') return out;
+    var urls = maps.urls || {};
+    var fa = maps.fa || {};
+    var colors = maps.colors || {};
+    Object.keys(urls).forEach(function (k) { out.urls[k] = urls[k]; });
+    Object.keys(fa).forEach(function (k) { out.fa[k] = fa[k]; });
+    Object.keys(colors).forEach(function (k) { out.colors[k] = colors[k]; });
+    return out;
+  }
+
+  function mergeIconLookups(primary, fallback) {
+    var out = { urls: {}, fa: {}, colors: {} };
+    var a = fallback || { urls: {}, fa: {}, colors: {} };
+    var b = primary || { urls: {}, fa: {}, colors: {} };
+    Object.keys(a.urls || {}).forEach(function (k) { out.urls[k] = a.urls[k]; });
+    Object.keys(a.fa || {}).forEach(function (k) { out.fa[k] = a.fa[k]; });
+    Object.keys(a.colors || {}).forEach(function (k) { out.colors[k] = a.colors[k]; });
+    Object.keys(b.urls || {}).forEach(function (k2) { out.urls[k2] = b.urls[k2]; });
+    Object.keys(b.fa || {}).forEach(function (k3) { out.fa[k3] = b.fa[k3]; });
+    Object.keys(b.colors || {}).forEach(function (k4) { out.colors[k4] = b.colors[k4]; });
+    return out;
+  }
+
   // Enrich nodes with _iconUrl (SVG) or _iconFa (FA class name for content.js to resolve)
-  async function enrichNodesWithIcons(nodes, forceRefreshMaps) {
+  async function enrichNodesWithIcons(nodes, forceRefreshMaps, preferredLookup) {
     if (!Array.isArray(nodes) || nodes.length === 0) return;
 
-    var maps = getGlobalIconMaps(!!forceRefreshMaps);
+    var maps = await getGlobalIconMaps(!!forceRefreshMaps);
+    maps = mergeIconLookups(maps, preferredLookup || _persistedProbeIconLookup);
     var domIcons = scrapeCanvasIcons();
     var svgCount = 0, faCount = 0;
+    var registryResolved = 0, fallbackResolved = 0;
 
     for (var j = 0; j < nodes.length; j++) {
       var type = nodes[j].type;
       if (!type) continue;
 
-      var url = maps.urls[type] || await resolveIconUrlForType(type) || domIcons[type] || null;
-      if (url) { nodes[j]._iconUrl = url; svgCount++; continue; }
+      var url = maps.urls[type] || null;
+      var registryFa = maps.fa[type] || null;
+      var registryColor = maps.colors[type] || null;
+      if (registryColor) nodes[j]._iconColor = registryColor;
+      console.log(LOG, '[icon-debug] node:', nodes[j].name || '(unnamed)', '| type:', type, '| registry map:', {
+        url: url,
+        fa: registryFa,
+        color: registryColor
+      });
+      if (url) {
+        nodes[j]._iconUrl = url;
+        svgCount++;
+        registryResolved++;
+        console.log(LOG, '[icon-debug] resolved from registry URL:', type, '->', url, '| success');
+        continue;
+      }
 
-      var faName = maps.fa[type] || null;
-      if (faName) { nodes[j]._iconFa = faName; faCount++; }
+      var faName = registryFa;
+      if (faName) {
+        nodes[j]._iconFa = faName;
+        faCount++;
+        registryResolved++;
+        console.log(LOG, '[icon-debug] resolved from registry FA:', type, '->', faName, '| success (CDN step in content script)');
+        continue;
+      }
+
+      var resolved = await resolveIconDetailsForType(type);
+      console.log(LOG, '[icon-debug] fallback lookup result for', type, ':', resolved);
+      if (resolved && resolved.color && !nodes[j]._iconColor) {
+        nodes[j]._iconColor = resolved.color;
+      }
+      if (resolved && resolved.url) {
+        nodes[j]._iconUrl = resolved.url;
+        svgCount++;
+        fallbackResolved++;
+        console.log(LOG, '[icon-debug] resolved from fallback URL:', type, '->', resolved.url, '| success');
+        continue;
+      }
+      if (resolved && resolved.fa) {
+        nodes[j]._iconFa = resolved.fa;
+        faCount++;
+        fallbackResolved++;
+        console.log(LOG, '[icon-debug] resolved from fallback FA:', type, '->', resolved.fa, '| success (CDN step in content script)');
+        continue;
+      }
+
+      var domUrl = domIcons[type] || null;
+      if (domUrl) {
+        nodes[j]._iconUrl = domUrl;
+        svgCount++;
+        fallbackResolved++;
+        console.log(LOG, '[icon-debug] resolved from DOM scrape:', type, '->', domUrl, '| success');
+      } else {
+        console.log(LOG, '[icon-debug] no icon resolved for', type, '| will fall back to emoji glyph');
+      }
     }
 
-    console.log(LOG, 'Icon enrichment:', nodes.length, 'nodes,', svgCount, 'SVG +', faCount, 'FA =', (svgCount + faCount), 'total');
+    console.log(
+      LOG,
+      'Icon enrichment:',
+      nodes.length,
+      'nodes,',
+      svgCount,
+      'SVG +',
+      faCount,
+      'FA =',
+      (svgCount + faCount),
+      'total | via registry map:',
+      registryResolved,
+      '| via fallback:',
+      fallbackResolved
+    );
   }
 
   function normalizeWorkflowPayload(value) {
@@ -826,7 +1179,8 @@
       var helperResult = await tryInPageApiHelper(workflowId);
       if (helperResult && helperResult.attempts) diagnostics.attempts = diagnostics.attempts.concat(helperResult.attempts);
       if (helperResult && helperResult.ok) {
-        await enrichNodesWithIcons(helperResult.payload.nodes, true);
+        await enrichNodesWithIcons(helperResult.payload.nodes, true, _persistedProbeIconLookup);
+        var helperIconMaps = await getGlobalIconMaps(false);
         diagnostics.authMode = helperResult.diagnostics.authMode;
         diagnostics.endpointUsed = helperResult.diagnostics.endpointUsed;
         diagnostics.status = helperResult.diagnostics.status;
@@ -834,7 +1188,8 @@
           type: 'n8n-subflow-fetch-result',
           reqId: reqId,
           payload: helperResult.payload,
-          diagnostics: diagnostics
+          diagnostics: diagnostics,
+          iconLookup: cloneIconLookupForMessage(helperIconMaps)
         }, '*');
         return;
       }
@@ -880,7 +1235,8 @@
 
           var json = await res.json();
           var data = json.data || json;
-          if (data && Array.isArray(data.nodes)) await enrichNodesWithIcons(data.nodes, true);
+          if (data && Array.isArray(data.nodes)) await enrichNodesWithIcons(data.nodes, true, _persistedProbeIconLookup);
+          var fetchIconMaps = await getGlobalIconMaps(false);
           if (src.usesCapturedHeaders) {
             authCapture.clearCapturedHeaders();
           }
@@ -889,7 +1245,8 @@
             type: 'n8n-subflow-fetch-result',
             reqId: reqId,
             payload: data,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            iconLookup: cloneIconLookupForMessage(fetchIconMaps)
           }, '*');
           return;
         } catch (err) {

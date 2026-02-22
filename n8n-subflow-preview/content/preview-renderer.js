@@ -180,10 +180,7 @@ const PreviewRenderer = (() => {
       // Centered icon inside the card — use real n8n icon if available, else emoji glyph
       const icon = document.createElement('div');
       const safeIconUrl = sanitizeIconUrl(node._iconUrl);
-      const hasImageIcon = Boolean(safeIconUrl);
-      const isFaIcon = Boolean(node._iconFa);
-      // Native n8n SVG icons keep their own colors, so use a neutral icon background.
-      const iconClass = hasImageIcon && !isFaIcon ? 'kind-native' : colorClass;
+      const iconClass = colorClass;
       icon.className = `n8n-sf-html-icon ${iconClass}`;
 
       if (safeIconUrl) {
