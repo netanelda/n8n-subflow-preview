@@ -224,7 +224,7 @@
 .n8n-sf-inline-map {
   width: 100%;
   min-height: 220px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .n8n-sf-overlay-resize-handle {
@@ -724,10 +724,10 @@
 }
 
 .n8n-sf-sp-map {
-  height: 220px;
+  min-height: 220px;
   margin-bottom: 12px;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .n8n-sf-sp-map .n8n-sf-map-wrap {
@@ -736,7 +736,19 @@
 
 .n8n-sf-pannable-map {
   cursor: grab;
-  overflow: hidden;
+  overflow: auto;
+}
+
+.n8n-sf-inline-map,
+.n8n-sf-sp-map,
+.n8n-sf-pannable-map {
+  scrollbar-width: none;
+}
+
+.n8n-sf-inline-map::-webkit-scrollbar,
+.n8n-sf-sp-map::-webkit-scrollbar,
+.n8n-sf-pannable-map::-webkit-scrollbar {
+  display: none;
 }
 
 .n8n-sf-pannable-map.n8n-sf-map-grabbing {

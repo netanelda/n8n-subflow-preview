@@ -9,9 +9,7 @@ const PreviewRenderer = (() => {
   const DEFAULT_TOTAL_H = 96; // card (64) + up to two-line name label below
   const DEFAULT_PAD = 24;
   // Never squeeze below this scale so cards don't overlap in dense workflows
-  const MIN_SCALE = 0.5;
-  const MAX_MAP_WIDTH = 920;
-  const MAX_MAP_HEIGHT = 420;
+  const MIN_SCALE = 0.55;
 
   function render(workflowData, container, options = {}) {
     if (!container) return;
@@ -32,8 +30,8 @@ const PreviewRenderer = (() => {
     const { positioned, requiredWidth, requiredHeight } = mapNodePositions(nodes, {
       width, height, nodeW, totalH, pad
     });
-    width = Math.min(Math.max(width, requiredWidth), MAX_MAP_WIDTH);
-    height = Math.min(Math.max(height, requiredHeight), MAX_MAP_HEIGHT);
+    width = requiredWidth;
+    height = requiredHeight;
 
     const wrapper = document.createElement('div');
     wrapper.className = `n8n-sf-map-wrap ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`;

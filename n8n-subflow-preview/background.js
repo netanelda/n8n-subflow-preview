@@ -4,7 +4,11 @@
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'fetchWorkflow') {
-    handleFetchWorkflow(msg.workflowId).then(sendResponse);
+    handleFetchWorkflow(msg.workflowId)
+      .then(sendResponse)
+      .catch((err) => {
+        sendResponse({ error: 'network_error', message: String(err) });
+      });
     return true;
   }
 });

@@ -604,16 +604,21 @@
     if (executeNodes.length === 0) return;
 
     const domNodes = document.querySelectorAll('[data-test-id="canvas-node"]');
+    let executeDomOrderIndex = 0;
     domNodes.forEach((el) => {
       try {
-        attachHoverDetection(el, executeNodes);
+        const typeAttr = el.getAttribute('data-node-type') || '';
+        const executeOrderIndex = typeAttr === 'n8n-nodes-base.executeWorkflow'
+          ? executeDomOrderIndex++
+          : -1;
+        attachHoverDetection(el, executeNodes, executeOrderIndex);
       } catch (err) {
         console.warn(`${LOG_PREFIX} Failed to bind node`, err);
       }
     });
   }
 
-  function attachHoverDetection(el, executeNodes) {
+  function attachHoverDetection(el, executeNodes, executeOrderIndex = -1) {
     if (el.dataset.subflowDetected) return;
 
     const nameEl = el.querySelector('[data-test-id="canvas-node-box-title"]')
@@ -628,6 +633,16 @@
       const typeAttr = el.getAttribute('data-node-type') || '';
       if (typeAttr === 'n8n-nodes-base.executeWorkflow' && executeNodes.length === 1) {
         matchedNode = executeNodes[0];
+      }
+      // Best-effort fallback when DOM titles are missing: map execute nodes by DOM order.
+      if (
+        !matchedNode
+        && typeAttr === 'n8n-nodes-base.executeWorkflow'
+        && executeNodes.length > 1
+        && executeOrderIndex >= 0
+        && executeOrderIndex < executeNodes.length
+      ) {
+        matchedNode = executeNodes[executeOrderIndex];
       }
     }
 
